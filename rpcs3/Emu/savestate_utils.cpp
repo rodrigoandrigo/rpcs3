@@ -658,7 +658,16 @@ bool hle_locks_t::try_lock()
 			break;
 		}
 
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(push)
+// This savestate lock still needs the existing full 64-bit wait semantics.
+// Do not truncate its value or turn the wait into a polling sleep.
+#pragma warning(disable: 4996)
+#endif
 		lock_val.wait(old);
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(pop)
+#endif
 	}
 
 	return false;

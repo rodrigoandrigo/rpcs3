@@ -316,7 +316,15 @@ bool compressed_serialization_file_handler::handle_file_op(utils::serial& ar, us
 
 				if (new_value & pending_data_wait_bit)
 				{
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(push)
+// Preserve the existing 64-bit pending-byte synchronization contract.
+#pragma warning(disable: 4996)
+#endif
 					m_pending_bytes.wait(new_value);
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(pop)
+#endif
 				}
 				else
 				{

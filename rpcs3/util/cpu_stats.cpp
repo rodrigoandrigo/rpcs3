@@ -5,12 +5,13 @@
 #include "Utilities/StrUtil.h"
 
 #include <algorithm>
+#include <limits>
 
 #ifdef _WIN32
 #include "util/asm.hpp"
 #include "windows.h"
 #include "tlhelp32.h"
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && !defined(RPCS3_UWP)
 #pragma comment(lib, "pdh.lib")
 #endif
 #else
@@ -56,7 +57,7 @@ LOG_CHANNEL(perf_log, "PERF");
 
 namespace utils
 {
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 	fmt::win_error pdh_error(PDH_STATUS status)
 	{
 		return fmt::win_error{static_cast<unsigned long>(status), LoadLibrary(L"pdh.dll")};
@@ -85,7 +86,7 @@ namespace utils
 
 	cpu_stats::~cpu_stats()
 	{
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 		if (m_cpu_query)
 		{
 			PDH_STATUS status = PdhCloseQuery(m_cpu_query);
@@ -99,7 +100,7 @@ namespace utils
 
 	void cpu_stats::init_cpu_query()
 	{
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 		PDH_STATUS status = PdhOpenQuery(NULL, 0, &m_cpu_query);
 		if (ERROR_SUCCESS != status)
 		{
@@ -123,12 +124,19 @@ namespace utils
 
 	void cpu_stats::get_per_core_usage(std::vector<double>& per_core_usage, double& total_usage)
 	{
+#ifdef RPCS3_UWP
+		// PDH machine-wide counters are unavailable. Empty/NaN means unknown,
+		// not a fabricated idle machine. get_usage still measures this process.
+		per_core_usage.clear();
+		total_usage = std::numeric_limits<double>::quiet_NaN();
+		return;
+#endif
 		total_usage = 0.0;
 
 		per_core_usage.resize(utils::get_thread_count());
 		std::fill(per_core_usage.begin(), per_core_usage.end(), 0.0);
 
-#ifdef _WIN32
+	#if defined(_WIN32) && !defined(RPCS3_UWP)
 		if (!m_cpu_cores || !m_cpu_query)
 		{
 			perf_log.warning("Can not collect per core cpu usage: The required API is not initialized.");
@@ -355,7 +363,10 @@ namespace utils
 
 	u32 cpu_stats::get_current_thread_count() // static
 	{
-#ifdef _WIN32
+#ifdef RPCS3_UWP
+		// No process snapshot privilege; zero is the existing unavailable sentinel.
+		return 0;
+#elif defined(_WIN32)
 		// first determine the id of the current process
 		const DWORD id = GetCurrentProcessId();
 

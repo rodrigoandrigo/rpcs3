@@ -1,0 +1,25 @@
+#pragma once
+
+#include <vector>
+#include <sstream>
+#include "../Program/VertexProgramDecompiler.h"
+
+struct D3D12VertexProgramDecompiler : public VertexProgramDecompiler
+{
+protected:
+	virtual std::string getFloatTypeName(size_t elementCount) override;
+	std::string getIntTypeName(size_t elementCount) override;
+	virtual std::string getFunction(enum FUNCTION) override;
+	std::string compareFunction(COMPARE, std::string_view, std::string_view, bool scalar) override;
+
+	virtual void insertHeader(std::stringstream &OS);
+	virtual void insertInputs(std::stringstream &OS, const std::vector<ParamType> &inputs);
+	virtual void insertConstants(std::stringstream &OS, const std::vector<ParamType> &constants);
+	virtual void insertOutputs(std::stringstream &OS, const std::vector<ParamType> &outputs);
+	virtual void insertMainStart(std::stringstream &OS);
+	virtual void insertMainEnd(std::stringstream &OS);
+
+	const RSXVertexProgram &rsx_vertex_program;
+public:
+	D3D12VertexProgramDecompiler(const RSXVertexProgram &prog);
+};

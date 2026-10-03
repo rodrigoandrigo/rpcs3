@@ -291,6 +291,15 @@ void init_fxo_for_exec(utils::serial* ar, bool full = false)
 // Some settings are not allowed with certain conditions
 static void fixup_settings(const psf::registry* _psf)
 {
+#ifdef RPCS3_UWP
+	// Process-global VEH is unavailable. Current generated guest code does not
+	// register the unwind metadata needed for the scoped SEH recovery path.
+	// Keep unsupported recompilers out of this profile until that is ported.
+	if (g_cfg.core.ppu_decoder != ppu_decoder_type::_static || g_cfg.core.spu_decoder != spu_decoder_type::_static)
+		sys_log.warning("UWP: using CPU interpreters; generated-code SEH/unwind integration is not implemented");
+	extern void rpcs3_embedded_normalize_settings();
+	rpcs3_embedded_normalize_settings();
+#endif
 	// Disable some incompatible settings in headless mode
 	if (Emu.IsHeadless())
 	{
@@ -432,6 +441,13 @@ extern void dump_executable(std::span<const u8> data, const ppu_module<lv2_obj>*
 
 void Emulator::Init()
 {
+#ifdef RPCS3_UWP
+	// The embedded host supplies the package-local configuration root before
+	// calling Init().  Loading this in Emulator's global constructor would run
+	// under DllMain, before that brokered path exists.
+	m_games_config.initialize();
+#endif
+
 	// Log LLVM version
 	if (static bool logged_llvm = false; !logged_llvm)
 	{
@@ -815,6 +831,9 @@ void Emulator::Init()
 
 	// Load IPC config
 	g_cfg_ipc.load();
+#ifdef RPCS3_UWP
+	g_cfg_ipc.ipc_server_enabled.set(false);
+#endif
 	sys_log.notice("Using IPC config:\n%s", g_cfg_ipc.to_string());
 
 	// Create and start IPC server only if needed
@@ -1532,7 +1551,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			if (m_title_id.size() < 3 && m_title_id.find_first_not_of('.') == umax)
 			{
 				// Do not allow if TITLE_ID result in path redirection
-				sys_log.fatal("Game directory not found using GAMEID token. (m_path='%s', title_id='%s')", m_path, m_title_id);
+				sys_log.fatal("Game directory not found using GAMEID token. (m_path='%s', title_id='%s')", m_title_id);
 				return game_boot_result::invalid_file_or_folder;
 			}
 

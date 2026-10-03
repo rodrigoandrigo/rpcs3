@@ -49,10 +49,16 @@ namespace vm
 	u8* const g_exec_addr = memory_reserve_4GiB(g_sudo_addr, 0x300000000);
 
 	// Hooks for memory R/W interception (default: zero offset to some function with only ret instructions)
+#ifndef RPCS3_UWP
 	u8* const g_hook_addr = memory_reserve_4GiB(g_exec_addr, 0x800000000);
+#endif
 
 	// Stats for debugging
+#ifdef RPCS3_UWP
+	u8* const g_stat_addr = memory_reserve_4GiB(g_exec_addr + 0x200000000);
+#else
 	u8* const g_stat_addr = memory_reserve_4GiB(g_hook_addr);
+#endif
 
 	// For SPU
 	u8* const g_free_addr = g_stat_addr + 0x1'0000'0000;
@@ -1176,7 +1182,13 @@ namespace vm
 
 		if (!utils::memory_lock(g_sudo_addr + addr, size))
 		{
+#ifdef RPCS3_UWP
+			// Page pinning is optional and unavailable in AppContainer. Do not
+			// suggest increasing desktop working-set limits for this host.
+			vm_log.trace("UWP: sudo page pinning unavailable (addr=0x%x, size=0x%x).", addr, size);
+#else
 			vm_log.error("Failed to lock sudo memory (addr=0x%x, size=0x%x). Consider increasing your system limits.", addr, size);
+#endif
 		}
 	}
 
@@ -2296,7 +2308,16 @@ namespace vm
 
 	inline namespace ps3_
 	{
-		static utils::shm s_hook{0x800000000, ""};
+#ifndef RPCS3_UWP
+		static utils::shm& hook_memory()
+		{
+			// Embedded/UWP hosts establish their brokered config and temporary
+			// directories during explicit core initialization. Constructing this
+			// mapping at DLL load time would access those paths under loader lock.
+			static utils::shm value{0x800000000, ""};
+			return value;
+		}
+#endif
 
 		void init()
 		{
@@ -2304,13 +2325,17 @@ namespace vm
 			"vm::g_base_addr = %p - %p\n"
 			"vm::g_sudo_addr = %p - %p\n"
 			"vm::g_exec_addr = %p - %p\n"
+#ifndef RPCS3_UWP
 			"vm::g_hook_addr = %p - %p\n"
+#endif
 			"vm::g_stat_addr = %p - %p\n"
 			"vm::g_reservations = %p - %p\n",
 			g_base_addr, g_base_addr + 0xffff'ffff,
 			g_sudo_addr, g_sudo_addr + 0xffff'ffff,
 			g_exec_addr, g_exec_addr + 0x200000000 - 1,
+#ifndef RPCS3_UWP
 			g_hook_addr, g_hook_addr + 0x800000000 - 1,
+#endif
 			g_stat_addr, g_stat_addr + 0xffff'ffff,
 			g_reservations, g_reservations + sizeof(g_reservations) - 1);
 
@@ -2332,10 +2357,17 @@ namespace vm
 			std::memset(g_range_lock_set, 0, sizeof(g_range_lock_set));
 			std::memset(g_range_lock_bits, 0, sizeof(g_range_lock_bits));
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 			utils::memory_release(g_hook_addr, 0x800000000);
 #endif
-			ensure(s_hook.map(g_hook_addr, utils::protection::rw, true));
+#ifndef RPCS3_UWP
+			ensure(hook_memory().map(g_hook_addr, utils::protection::rw, true));
+#else
+			// Hook interception has no consumers in the UWP interpreter path.
+			// Do not reserve/map its 32 GiB COW section: COW charges the entire
+			// view against the system commit limit even for an empty sparse file.
+			vm_log.notice("UWP: unused 32 GiB hook mapping disabled");
+#endif
 		}
 	}
 
@@ -2359,10 +2391,10 @@ namespace vm
 		utils::memory_decommit(g_exec_addr, 0x200000000);
 		utils::memory_decommit(g_stat_addr, 0x100000000);
 
-#ifdef _WIN32
-		s_hook.unmap(g_hook_addr);
+#if defined(_WIN32) && !defined(RPCS3_UWP)
+		hook_memory().unmap(g_hook_addr);
 		ensure(utils::memory_reserve(0x800000000, g_hook_addr));
-#else
+#elif !defined(RPCS3_UWP)
 		utils::memory_decommit(g_hook_addr, 0x800000000);
 #endif
 

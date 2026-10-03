@@ -10,6 +10,13 @@ LOG_CHANNEL(cfg_log, "CFG");
 
 games_config::games_config()
 {
+#ifndef RPCS3_UWP
+	load();
+#endif
+}
+
+void games_config::initialize()
+{
 	load();
 }
 

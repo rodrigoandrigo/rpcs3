@@ -32,10 +32,11 @@ struct cfg_ps_moves final : cfg::node
 
 	std::array<cfg_ps_move*, 4> move{ &move1, &move2, &move3, &move4 };
 
-	const std::string path;
-
 	bool load();
 	void save() const;
+
+private:
+	std::string path() const;
 };
 
 extern cfg_ps_moves g_cfg_move;

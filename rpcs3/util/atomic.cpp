@@ -6,7 +6,9 @@
 const bool utils::g_atomic_lse2 = utils::has_lse2();
 #endif
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(RPCS3_UWP)
+#define USE_STD
+#elif defined(__linux__) || defined(__APPLE__)
 #define USE_FUTEX
 #elif !defined(_WIN32)
 #define USE_STD

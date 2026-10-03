@@ -1,0 +1,36 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\rodri\\Dev1\\Projetos\\rpcs3-master\\RPCS3-UWP\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{832EACB8-66F9-4881-AABC-D85F68A0541D}|RPCS3-UWP.vcxproj|C:\\Users\\rodri\\Dev1\\Projetos\\rpcs3-master\\RPCS3-UWP\\FrontendHost\\UWP-App\\Package.appxmanifest||{4D47164B-07B6-4A52-A855-728D6A2E2AA3}",
+      "RelativeMoniker": "D:0:0:{832EACB8-66F9-4881-AABC-D85F68A0541D}|RPCS3-UWP.vcxproj|solutionrelative:FrontendHost\\UWP-App\\Package.appxmanifest||{4D47164B-07B6-4A52-A855-728D6A2E2AA3}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Package.appxmanifest",
+              "DocumentMoniker": "C:\\Users\\rodri\\Dev1\\Projetos\\rpcs3-master\\RPCS3-UWP\\FrontendHost\\UWP-App\\Package.appxmanifest",
+              "RelativeDocumentMoniker": "FrontendHost\\UWP-App\\Package.appxmanifest",
+              "ToolTip": "C:\\Users\\rodri\\Dev1\\Projetos\\rpcs3-master\\RPCS3-UWP\\FrontendHost\\UWP-App\\Package.appxmanifest",
+              "RelativeToolTip": "FrontendHost\\UWP-App\\Package.appxmanifest",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001793|",
+              "WhenOpened": "2026-10-03T13:58:07.433Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

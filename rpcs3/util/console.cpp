@@ -6,12 +6,15 @@
 #endif
 
 #include <iostream>
+#ifdef RPCS3_UWP
+void embedded_console_log(std::string_view text);
+#endif
 
 namespace utils
 {
 	void attach_console([[maybe_unused]] int stream, [[maybe_unused]] bool open_console)
 	{
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 		if (!stream)
 		{
 			return;
@@ -41,6 +44,11 @@ namespace utils
 
 	void output_stderr(std::string_view str, bool with_endline)
 	{
+#ifdef RPCS3_UWP
+		// Do not attach, redirect or depend on the host's console streams.
+		(void)with_endline;
+		embedded_console_log(str);
+#else
 		if (with_endline)
 		{
 #ifdef _WIN32
@@ -56,6 +64,7 @@ namespace utils
 		std::clog << str;
 #else
 		std::cerr << str;
+#endif
 #endif
 	}
 }

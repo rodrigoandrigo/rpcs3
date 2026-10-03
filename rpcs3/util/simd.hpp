@@ -6,7 +6,7 @@
 #include "util/asm.hpp"
 #include "Utilities/JIT.h"
 
-#if defined(ARCH_X64)
+#if defined(ARCH_X64) && !defined(RPCS3_UWP)
 #ifdef _MSC_VER
 #include <intrin.h>
 #else
@@ -2318,7 +2318,7 @@ inline v128 gv_roundfs_even(const v128& a)
 	return _mm_round_ps(a, 8 + 0);
 #elif defined(ARCH_ARM64)
 	return vrndnq_f32(a);
-#elif defined(ARCH_X64)
+#elif defined(ARCH_X64) && !defined(RPCS3_UWP)
 	return sse41_roundf<0>(a);
 #else
 	v128 r;
@@ -2334,7 +2334,7 @@ inline v128 gv_roundfs_ceil(const v128& a)
 	return _mm_round_ps(a, 8 + 2);
 #elif defined(ARCH_ARM64)
 	return vrndpq_f32(a);
-#elif defined(ARCH_X64)
+#elif defined(ARCH_X64) && !defined(RPCS3_UWP)
 	return sse41_roundf<2>(a);
 #else
 	v128 r;
@@ -2350,7 +2350,7 @@ inline v128 gv_roundfs_floor(const v128& a)
 	return _mm_round_ps(a, 8 + 1);
 #elif defined(ARCH_ARM64)
 	return vrndmq_f32(a);
-#elif defined(ARCH_X64)
+#elif defined(ARCH_X64) && !defined(RPCS3_UWP)
 	return sse41_roundf<1>(a);
 #else
 	v128 r;
@@ -2366,7 +2366,7 @@ inline v128 gv_roundfs_trunc(const v128& a)
 	return _mm_round_ps(a, 8 + 3);
 #elif defined(ARCH_ARM64)
 	return vrndq_f32(a);
-#elif defined(ARCH_X64)
+#elif defined(ARCH_X64) && !defined(RPCS3_UWP)
 	return sse41_roundf<3>(a);
 #else
 	v128 r;

@@ -2,7 +2,9 @@
 
 #include <unordered_map>
 
+#ifndef RPCS3_UWP
 #include <miniupnpc.h>
+#endif
 
 #include "upnp_config.h"
 #include "Utilities/mutex.h"
@@ -26,7 +28,9 @@ private:
 
 	shared_mutex m_mutex;
 	cfg_upnp m_cfg;
+#ifndef RPCS3_UWP
 	IGDdatas m_igd_data{};
 	UPNPUrls m_igd_urls{};
+#endif
 	std::unordered_map<std::string, std::unordered_map<u16, u16>> m_bindings;
 };

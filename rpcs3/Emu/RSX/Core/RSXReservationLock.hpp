@@ -3,12 +3,15 @@
 #include <util/types.hpp>
 #include "../RSXThread.h"
 #include "Emu/system_config.h"
+#include "RSXCpuMemoryAccess.hpp"
 
 namespace rsx
 {
 	template<bool IsFullLock = false, uint Stride = 128>
 	class reservation_lock
 	{
+		cpu_memory_access cpu_access;
+		cpu_memory_access source_access;
 		u32 addr = 0;
 		u32 length = 0;
 
@@ -24,7 +27,7 @@ namespace rsx
 		}
 
 	public:
-		reservation_lock(u32 addr, u32 length)
+		reservation_lock(u32 addr, u32 length) : cpu_access(addr, length)
 		{
 			if (g_cfg.core.rsx_accurate_res_access &&
 				addr < constants::local_mem_base)
@@ -33,7 +36,7 @@ namespace rsx
 			}
 		}
 
-		reservation_lock(u32 addr, u32 length, bool setting)
+		reservation_lock(u32 addr, u32 length, bool setting) : cpu_access(addr, length)
 		{
 			if (setting)
 			{
@@ -44,6 +47,7 @@ namespace rsx
 		// Multi-range lock. If ranges overlap, the combined range will be acquired.
 		// If ranges do not overlap, the first range that is in main memory will be acquired.
 		reservation_lock(u32 dst_addr, u32 dst_length, u32 src_addr, u32 src_length)
+			: cpu_access(dst_addr, dst_length), source_access(src_addr, src_length)
 		{
 			if (!g_cfg.core.rsx_accurate_res_access)
 			{
@@ -74,6 +78,11 @@ namespace rsx
 		template <typename T = void>
 		void update_if_enabled(u32 addr, u32 _length, const std::add_pointer_t<T>& lock_release = std::add_pointer_t<void>{})
 		{
+			if (cpu_access.active())
+			{
+				if constexpr (!std::is_void_v<T>) lock_release->release(0);
+				cpu_access.reset(addr, _length);
+			}
 			if (!length)
 			{
 				unlock();

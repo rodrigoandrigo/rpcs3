@@ -26,9 +26,10 @@ struct cfg_camera final : cfg::node
 	camera_setting get_camera_setting(std::string_view handler, std::string_view camera, bool& success);
 	void set_camera_setting(std::string_view handler, std::string_view camera, const camera_setting& setting);
 
-	const std::string path;
-
 	cfg::map_entry cameras{ this, "Cameras" }; // <handler-camera>: <width>,<height>,<min_fps>,<max_fps>,<format>,<colorspace>
+
+private:
+	std::string path() const;
 };
 
 extern cfg_camera g_cfg_camera;

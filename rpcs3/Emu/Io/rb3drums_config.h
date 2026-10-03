@@ -21,9 +21,10 @@ struct cfg_rb3drums final : cfg::node
 	cfg::uint<0, 127> midi_cc_threshold{this, "Midi CC threshold", 64, true};
 	cfg::_bool midi_cc_invert_threshold{this, "Midi CC invert threshold", false, true};
 
-	const std::string path;
-
 	atomic_t<bool> reload_requested = false;
+
+private:
+	std::string path() const;
 };
 
 extern cfg_rb3drums g_cfg_rb3drums;

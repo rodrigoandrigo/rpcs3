@@ -174,7 +174,11 @@ if(WIN32)
         Audio/XAudio2/xaudio2_enumerator.cpp
     )
     target_compile_definitions(rpcs3_emu PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0A00)
-    target_link_libraries(rpcs3_emu PRIVATE pdh bcrypt dbghelp)
+    if(RPCS3_BUILD_CORE_DLL)
+        target_link_libraries(rpcs3_emu PRIVATE bcrypt)
+    else()
+        target_link_libraries(rpcs3_emu PRIVATE pdh bcrypt dbghelp)
+    endif()
 endif()
 
 # Cell
@@ -585,7 +589,7 @@ target_sources(rpcs3_emu PRIVATE
     RSX/Utils/rsx_utils.cpp
 )
 
-if(NOT ANDROID AND NOT APPLE)
+if(NOT ANDROID AND NOT APPLE AND NOT RPCS3_BUILD_CORE_DLL)
     target_sources(rpcs3_emu PRIVATE
         RSX/GL/GLCommonDecompiler.cpp
         RSX/GL/GLCompute.cpp
@@ -683,6 +687,11 @@ if(NOT WIN32)
 endif()
 find_package(Threads REQUIRED)
 
+if(NOT RPCS3_BUILD_CORE_DLL)
+    target_link_libraries(rpcs3_emu PUBLIC 3rdparty::libusb 3rdparty::cubeb 3rdparty::miniupnpc
+        PRIVATE 3rdparty::rtmidi)
+endif()
+
 target_link_libraries(rpcs3_emu
     PUBLIC
         3rdparty::llvm
@@ -693,12 +702,9 @@ target_link_libraries(rpcs3_emu
         3rdparty::stblib
         3rdparty::vulkan
         3rdparty::glew
-        3rdparty::libusb
         3rdparty::wolfssl
         3rdparty::openal
-        3rdparty::cubeb
         3rdparty::soundtouch
-        3rdparty::miniupnpc
         3rdparty::libevdev
         3rdparty::protobuf
         3rdparty::pugixml
@@ -707,7 +713,6 @@ target_link_libraries(rpcs3_emu
     PRIVATE
         3rdparty::glslang
         3rdparty::libpng
-        3rdparty::rtmidi
         3rdparty::yaml-cpp
         3rdparty::zlib
         3rdparty::zstd

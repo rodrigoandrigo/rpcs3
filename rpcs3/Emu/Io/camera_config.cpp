@@ -8,31 +8,37 @@ cfg_camera g_cfg_camera;
 
 cfg_camera::cfg_camera()
 	: cfg::node()
-	, path(fs::get_config_dir(true) + "camera.yml")
 {
+}
+
+std::string cfg_camera::path() const
+{
+	return fs::get_config_dir(true) + "camera.yml";
 }
 
 bool cfg_camera::load()
 {
-	camera_log.notice("Loading camera config from '%s'", path);
+	const std::string config_path = path();
+	camera_log.notice("Loading camera config from '%s'", config_path);
 
-	if (fs::file cfg_file{ path, fs::read })
+	if (fs::file cfg_file{ config_path, fs::read })
 	{
 		return from_string(cfg_file.to_string());
 	}
 
-	camera_log.notice("Camera config missing. Using default settings. Path: %s", path);
+	camera_log.notice("Camera config missing. Using default settings. Path: %s", config_path);
 	from_default();
 	return false;
 }
 
 void cfg_camera::save() const
 {
-	camera_log.notice("Saving camera config to '%s'", path);
+	const std::string config_path = path();
+	camera_log.notice("Saving camera config to '%s'", config_path);
 
-	if (!cfg::node::save(path))
+	if (!cfg::node::save(config_path))
 	{
-		camera_log.error("Failed to save camera config to '%s' (error=%s)", path, fs::g_tls_error);
+		camera_log.error("Failed to save camera config to '%s' (error=%s)", config_path, fs::g_tls_error);
 	}
 }
 

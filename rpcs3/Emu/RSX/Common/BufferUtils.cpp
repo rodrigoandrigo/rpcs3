@@ -180,7 +180,7 @@ namespace
 #endif
 }
 
-#if defined(ARCH_X64)
+#if defined(ARCH_X64) && !defined(RPCS3_UWP)
 DECLARE(copy_data_swap_u32) = build_function_asm<void(*)(u32*, const u32*, u32), asmjit::simd_builder>("copy_data_swap_u32", &build_copy_data_swap_u32<false>);
 DECLARE(copy_data_swap_u32_cmp) = build_function_asm<bool(*)(u32*, const u32*, u32), asmjit::simd_builder>("copy_data_swap_u32_cmp", &build_copy_data_swap_u32<true>);
 #else
@@ -226,7 +226,7 @@ namespace
 			return (u64{max_index} << 32) | u64{min_index};
 		}
 
-#if defined(ARCH_X64)
+#if defined(ARCH_X64) && !defined(RPCS3_UWP)
 		template <typename T>
 		static void build_upload_untouched(asmjit::simd_builder& c, native_args& args)
 		{
@@ -294,7 +294,7 @@ namespace
 			u32 count = ::size32(src);
 			u64 r;
 
-#if defined(ARCH_X64)
+#if defined(ARCH_X64) && !defined(RPCS3_UWP)
 			if constexpr (sizeof(T) == 2)
 				r = upload_xi16(src.data(), dst.data(), count);
 			else
@@ -327,7 +327,7 @@ namespace
 			return (u64{max_index} << 32) | u64{min_index};
 		}
 
-#ifdef ARCH_X64
+#if defined(ARCH_X64) && !defined(RPCS3_UWP)
 		template <typename T>
 		static void build_upload_untouched(asmjit::simd_builder& c, native_args& args)
 		{
@@ -400,7 +400,7 @@ namespace
 			u32 count = ::size32(src);
 			u64 r;
 
-#if defined(ARCH_X64)
+#if defined(ARCH_X64) && !defined(RPCS3_UWP)
 			if constexpr (sizeof(T) == 2)
 				r = upload_xi16(src.data(), dst.data(), count, restart_index);
 			else

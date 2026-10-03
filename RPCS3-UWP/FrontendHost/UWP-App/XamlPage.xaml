@@ -1,0 +1,14 @@
+<Page
+    x:Class="UwpImGuiFrontend.XamlPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="#101014">
+    <Grid>
+        <SwapChainPanel x:Name="FrontendPanel" />
+        <Border x:Name="StatusOverlay" Background="#E0101014" Padding="24">
+            <TextBlock x:Name="StatusText" Text="Starting RPCS3..." Foreground="White"
+                       FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       TextWrapping="Wrap" TextAlignment="Center" />
+        </Border>
+    </Grid>
+</Page>

@@ -1083,7 +1083,14 @@ bool cpu_thread::check_state() noexcept
 						else
 						{
 							// TODO: fix the workaround
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(push)
+#pragma warning(disable: 4996) // Preserve the 64-bit suspend generation wait.
+#endif
 							g_suspend_counter.wait(ctr, atomic_wait_timeout{10'000});
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(pop)
+#endif
 						}
 					}
 					else

@@ -23,7 +23,7 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
     endif()
 endif()
 
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT RPCS3_BUILD_CORE_DLL)
     # Qt
     # finds Qt libraries and setups custom commands for MOC and UIC
     # Must be done here because generated MOC and UIC targets cant
@@ -34,11 +34,16 @@ endif()
 # subdirectories
 add_subdirectory(Emu)
 
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT RPCS3_BUILD_CORE_DLL)
     add_subdirectory(rpcs3qt)
 endif()
 
 gen_git_version(${CMAKE_CURRENT_SOURCE_DIR})
+
+if(RPCS3_BUILD_CORE_DLL)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/Embedded/CMakeLists.txt)
+    return()
+endif()
 
 if (NOT ANDROID)
     # Build rpcs3_lib

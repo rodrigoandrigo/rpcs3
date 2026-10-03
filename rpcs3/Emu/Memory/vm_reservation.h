@@ -2,6 +2,7 @@
 
 #include "vm.h"
 #include "vm_locking.h"
+#include "Emu/RSX/Core/RSXCpuMemoryAccess.hpp"
 #include "util/atomic.hpp"
 #include "util/tsc.hpp"
 #include <functional>
@@ -146,6 +147,7 @@ namespace vm
 		// Atomic operation will be performed on aligned 128 bytes of data, so the data size and alignment must comply
 		static_assert(sizeof(T) <= 128 && alignof(T) == sizeof(T), "vm::reservation_op: unsupported type");
 		static_assert(std::is_trivially_copyable_v<T>, "vm::reservation_op: not triv copyable (optimization)");
+		rsx::cpu_memory_access memory_access(static_cast<u32>(ptr.addr()) & -128, 128);
 
 		// Use "super" pointer to prevent access violation handling during atomic op
 		const auto sptr = vm::get_super_ptr<T>(static_cast<u32>(ptr.addr()));
@@ -256,6 +258,7 @@ namespace vm
 	{
 		// Optimized real ptr -> vm ptr conversion, simply UB if out of range
 		const u32 addr = static_cast<u32>(reinterpret_cast<const u8*>(&data) - g_base_addr);
+		rsx::cpu_memory_access memory_access(addr & -128, 128);
 
 		// Use "super" pointer to prevent access violation handling during atomic op
 		const auto sptr = vm::get_super_ptr<T>(addr);

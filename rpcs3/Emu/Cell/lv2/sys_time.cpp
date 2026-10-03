@@ -28,13 +28,23 @@ struct time_aux_info_t
 };
 
 // Initialize time-related values
+#ifdef RPCS3_UWP
+static const time_aux_info_t& time_aux_info()
+{
+	// Defer initialization to a guarded core call, not DLL loader execution.
+	static
+#endif
 const auto s_time_aux_info = []() -> time_aux_info_t
 {
 	LARGE_INTEGER freq;
 	if (!QueryPerformanceFrequency(&freq))
 	{
+#ifdef RPCS3_UWP
+		fmt::throw_exception("High-resolution performance counter unavailable");
+#else
 		MessageBox(nullptr, L"Your hardware doesn't support a high-resolution performance counter", L"Error", MB_OK | MB_ICONERROR);
 		return {};
+#endif
 	}
 
 	LARGE_INTEGER start;
@@ -50,6 +60,13 @@ const auto s_time_aux_info = []() -> time_aux_info_t
 
 	return result;
 }();
+
+#ifdef RPCS3_UWP
+	return s_time_aux_info;
+}
+#else
+static const time_aux_info_t& time_aux_info() { return s_time_aux_info; }
+#endif
 
 #elif __APPLE__
 
@@ -171,7 +188,7 @@ u64 get_timebased_time()
 		ensure(QueryPerformanceCounter(&count));
 
 		const u64 time = count.QuadPart;
-		const u64 freq = s_time_aux_info.perf_freq;
+		const u64 freq = time_aux_info().perf_freq;
 
 #if _MSC_VER
 		const u64 result = static_cast<u64>(u128_from_mul(time * g_cfg.core.clocks_scale, g_timebase_freq) / freq / 100u);
@@ -231,7 +248,7 @@ u64 get_system_time()
 		ensure(QueryPerformanceCounter(&count));
 
 		const u64 time = count.QuadPart;
-		const u64 freq = s_time_aux_info.perf_freq;
+		const u64 freq = time_aux_info().perf_freq;
 
 #if _MSC_VER
 		const u64 result = static_cast<u64>(u128_from_mul(time, 1000000ull) / freq);
@@ -350,18 +367,21 @@ error_code sys_time_get_current_time(vm::ptr<s64> sec, vm::ptr<s64> nsec)
 	}
 
 #ifdef _WIN32
+	// Establish the lazy UWP epoch before sampling the counter. Otherwise the
+	// first sample predates start_time and unsigned subtraction overflows.
+	const auto& clock = time_aux_info();
 	LARGE_INTEGER count;
 	ensure(QueryPerformanceCounter(&count));
 
-	const u64 diff_base = count.QuadPart - s_time_aux_info.start_time;
+	const u64 diff_base = count.QuadPart >= clock.start_time ? count.QuadPart - clock.start_time : 0;
 
 	// Get time difference in nanoseconds (using 128 bit accumulator)
 	const u64 diff_sl = diff_base * 1000000000ull;
 	const u64 diff_sh = utils::umulh64(diff_base, 1000000000ull);
-	const u64 diff = utils::udiv128(diff_sh, diff_sl, s_time_aux_info.perf_freq);
+	const u64 diff = utils::udiv128(diff_sh, diff_sl, clock.perf_freq);
 
 	// get time since Epoch in nanoseconds
-	const u64 time = s_time_aux_info.start_ftime * 100u + (diff * g_cfg.core.clocks_scale / 100u);
+	const u64 time = clock.start_ftime * 100u + (diff * g_cfg.core.clocks_scale / 100u);
 
 	// scale to seconds, and add the console time offset (which might be negative)
 	*sec = (time / 1000000000ull) + g_cfg.sys.console_time_offset;

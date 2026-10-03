@@ -86,9 +86,15 @@ namespace utils
 #endif
 
 #ifdef _WIN32
+#ifdef RPCS3_UWP
+	inline constexpr auto VirtualAlloc2 = &::VirtualAlloc2FromApp;
+	inline constexpr auto MapViewOfFile3 = &::MapViewOfFile3FromApp;
+	inline constexpr auto UnmapViewOfFile2 = &::UnmapViewOfFile2;
+#else
 	DYNAMIC_IMPORT("KernelBase.dll", VirtualAlloc2, PVOID(HANDLE Process, PVOID Base, SIZE_T Size, ULONG AllocType, ULONG Prot, MEM_EXTENDED_PARAMETER*, ULONG));
 	DYNAMIC_IMPORT("KernelBase.dll", MapViewOfFile3, PVOID(HANDLE Handle, HANDLE Process, PVOID Base, ULONG64 Off, SIZE_T ViewSize, ULONG AllocType, ULONG Prot, MEM_EXTENDED_PARAMETER*, ULONG));
 	DYNAMIC_IMPORT("KernelBase.dll", UnmapViewOfFile2, BOOL(HANDLE Process, PVOID BaseAddress, ULONG UnmapFlags));
+#endif
 
 	bool has_win10_memory_mapping_api()
 	{
@@ -236,7 +242,11 @@ namespace utils
 			return nullptr;
 		}
 
+#ifdef RPCS3_UWP
+		return ::VirtualAllocFromApp(use_addr, size, MEM_RESERVE, PAGE_NOACCESS);
+#else
 		return ::VirtualAlloc(use_addr, size, MEM_RESERVE, PAGE_NOACCESS);
+#endif
 #else
 		if (use_addr && reinterpret_cast<uptr>(use_addr) % 0x10000)
 		{
@@ -319,7 +329,21 @@ namespace utils
 		}
 
 #ifdef _WIN32
+#ifdef RPCS3_UWP
+		// VirtualAllocFromApp explicitly rejects executable protections. Commit
+		// writable pages first, then opt them into JIT execution through
+		// VirtualProtectFromApp (guarded by the package codeGeneration capability).
+		const bool executable = prot == protection::wx || prot == protection::rx;
+		const DWORD commit_protection = executable ? PAGE_READWRITE : +prot;
+		ensure(::VirtualAllocFromApp(pointer, size, MEM_COMMIT, commit_protection));
+		if (prot == protection::rx)
+		{
+			DWORD old_protection = 0;
+			ensure(::VirtualProtectFromApp(pointer, size, PAGE_EXECUTE_READ, &old_protection));
+		}
+#else
 		ensure(::VirtualAlloc(pointer, size, MEM_COMMIT, +prot));
+#endif
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
 		ensure(::mprotect(reinterpret_cast<void*>(ptr64 & -get_page_size()), size + (ptr64 & (get_page_size() - 1)), +prot) != -1);
@@ -431,7 +455,12 @@ namespace utils
 #ifdef _WIN32
 
 		DWORD old;
+#ifdef RPCS3_UWP
+		const DWORD native_protection = prot == protection::wx ? PAGE_EXECUTE_READ : +prot;
+		if (::VirtualProtectFromApp(pointer, size, native_protection, &old))
+#else
 		if (::VirtualProtect(pointer, size, +prot, &old))
+#endif
 		{
 			return;
 		}
@@ -441,7 +470,11 @@ namespace utils
 			const u64 boundary = (addr + 0x10000) & -0x10000;
 			const u64 block_size = std::min(boundary, end) - addr;
 
+#ifdef RPCS3_UWP
+			if (!::VirtualProtectFromApp(reinterpret_cast<LPVOID>(addr), block_size, native_protection, &old))
+#else
 			if (!::VirtualProtect(reinterpret_cast<LPVOID>(addr), block_size, +prot, &old))
+#endif
 			{
 				fmt::throw_exception("VirtualProtect failed (%p, 0x%x, addr=0x%x, error=%s)", pointer, size, addr, fmt::win_error{GetLastError(), nullptr});
 			}
@@ -462,7 +495,10 @@ namespace utils
 			return true;
 		}
 
-#ifdef _WIN32
+#ifdef RPCS3_UWP
+		SetLastError(ERROR_NOT_SUPPORTED);
+		return false;
+#elif defined(_WIN32)
 		return ::VirtualLock(pointer, size);
 #else
 		return !::mlock(pointer, size);
@@ -690,7 +726,11 @@ namespace utils
 
 			if (!set_sparse_and_map(storage2, f.get_handle(), m_size))
 			{
+#ifdef RPCS3_UWP
+				fmt::throw_exception("Failed to initialize RPCS3 sparse storage (Win32 error %u)", GetLastError());
+#else
 				MessageBoxW(0, L"Failed to initialize sparse file.\nCan't find a filesystem with sparse file support (NTFS).", L"RPCS3", MB_ICONERROR);
+#endif
 			}
 
 			m_storage = std::move(storage2);
@@ -836,7 +876,17 @@ namespace utils
 			access |= FILE_MAP_COPY;
 		}
 
-		if (auto ret = static_cast<u8*>(::MapViewOfFileEx(m_handle, access, 0, 0, m_size, ptr)))
+#ifdef RPCS3_UWP
+		DWORD page_protection = +prot;
+		if (cow && (prot == protection::rw || prot == protection::wx))
+			page_protection = prot == protection::wx ? PAGE_EXECUTE_WRITECOPY : PAGE_WRITECOPY;
+		auto* mapped = ptr
+			? ::MapViewOfFile3FromApp(m_handle, GetCurrentProcess(), ptr, 0, m_size, 0, page_protection, nullptr, 0)
+			: ::MapViewOfFileFromApp(m_handle, cow ? FILE_MAP_COPY | (access & FILE_MAP_EXECUTE) : access, 0, m_size);
+#else
+		auto* mapped = ::MapViewOfFileEx(m_handle, access, 0, 0, m_size, ptr);
+#endif
+		if (auto ret = static_cast<u8*>(mapped))
 		{
 			if (prot != protection::rw && prot != protection::wx)
 			{

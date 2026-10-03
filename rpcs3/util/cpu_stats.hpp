@@ -3,7 +3,7 @@
 #include "util/types.hpp"
 #include <vector>
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 #include <pdh.h>
 #include <pdhmsg.h>
 #endif
@@ -16,7 +16,7 @@ namespace utils
 		u64 m_sys_cpu = 0;
 		u64 m_usr_cpu = 0;
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 		PDH_HQUERY m_cpu_query = nullptr;
 		PDH_HCOUNTER m_cpu_cores = nullptr;
 #elif __linux__

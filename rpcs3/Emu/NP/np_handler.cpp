@@ -612,7 +612,13 @@ namespace np
 
 	bool np_handler::discover_ether_address()
 	{
-		if (g_cfg.net.derive_mac_from_psid)
+#ifdef RPCS3_UWP
+		// Use the existing guest identity, not a desktop host-adapter query.
+		constexpr bool derive_mac = true;
+#else
+		const bool derive_mac = g_cfg.net.derive_mac_from_psid;
+#endif
+		if (derive_mac)
 		{
 			const u128 psid = g_cfg.sys.console_psid;
 			memcpy(ether_address.data(), &psid, 6);
@@ -640,7 +646,7 @@ namespace np
 			}
 			freeifaddrs(ifap);
 		}
-#elif defined(_WIN32)
+#elif defined(_WIN32) && !defined(RPCS3_UWP)
 		std::vector<u8> adapter_infos(sizeof(IP_ADAPTER_INFO));
 		ULONG size_infos = sizeof(IP_ADAPTER_INFO);
 
@@ -654,7 +660,7 @@ namespace np
 			// nph_log.notice("Determined Ethernet address to be %s", ether_to_string(ether_address));
 			return true;
 		}
-#else
+#elif !defined(RPCS3_UWP)
 		ifreq ifr;
 		ifconf ifc;
 		char buf[1024];

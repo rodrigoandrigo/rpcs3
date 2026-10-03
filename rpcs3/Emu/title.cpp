@@ -5,7 +5,7 @@
 #include "util/sysinfo.hpp"
 #include "Emu/system_config.h"
 
-#if !(defined(__ANDROID__) || defined(__APPLE__))
+#if !(defined(__ANDROID__) || defined(__APPLE__) || defined(RPCS3_UWP))
 #include "Emu/RSX/GL/glutils/capabilities.h"
 #endif
 
@@ -84,7 +84,7 @@ namespace rpcs3
 						title_string += "null";
 						break;
 					case video_renderer::opengl:
-#if !(defined(__ANDROID__) || defined(__APPLE__))
+#if !(defined(__ANDROID__) || defined(__APPLE__) || defined(RPCS3_UWP))
 						title_string += gl::get_device_name();
 #else
 						title_string += "OpenGL GPU";

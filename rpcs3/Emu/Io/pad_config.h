@@ -194,11 +194,13 @@ struct cfg_input_configurations final : cfg::node
 	bool load();
 	void save() const;
 
-	const std::string path;
 	const std::string global_key = "global";
 	const std::string default_config = "Default";
 
 	cfg::map_entry active_configs{ this, "Active Configurations" };
+
+private:
+	std::string path() const;
 };
 
 extern cfg_input g_cfg_input;

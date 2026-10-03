@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{832EACB8-66F9-4881-AABC-D85F68A0541D}</ProjectGuid>
+    <Keyword>MakeFileProj</Keyword>
+    <RootNamespace>RPCS3_UWP</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Makefile</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <NMakeBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)Build-Solution.ps1" -Action Build -Configuration $(Configuration) -Platform x64</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)Build-Solution.ps1" -Action Rebuild -Configuration $(Configuration) -Platform x64</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)Build-Solution.ps1" -Action Clean -Configuration $(Configuration) -Platform x64</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)..\build-uwp-msvc\host\Frontend\RPCS3-UWP-Host\$(Configuration)\RPCS3-UWP.exe</NMakeOutput>
+    <NMakePreprocessorDefinitions>UWP_IMGUI_FRONTEND_UWP;RPCS3_XAML_HOST;RPCS3_HOST_WITH_CORE;%(NMakePreprocessorDefinitions)</NMakePreprocessorDefinitions>
+    <NMakeIncludeSearchPath>$(ProjectDir);$(ProjectDir)FrontendHost;$(ProjectDir)FrontendHost\UWP-App;$(ProjectDir)Frontend\UWP-ImGuiFrontend\include;$(ProjectDir)Frontend\dependencies\imgui;$(ProjectDir)..\rpcs3\Embedded;$(NMakeIncludeSearchPath)</NMakeIncludeSearchPath>
+    <DefaultLanguage>en-us</DefaultLanguage>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+    <None Include="CONFIGURATION-AUDIT.md" />
+    <None Include="CMakeLists.txt" />
+    <None Include="Build-Solution.ps1" />
+    <None Include="Build-Core.ps1" />
+    <None Include="Build-Host.ps1" />
+    <None Include="Frontend\CMakeLists.txt" />
+    <None Include="FrontendHost\CMakeLists.txt" />
+    <None Include="Frontend\UWP-ImGuiFrontend\CMakeLists.txt" />
+    <None Include="FrontendHost\UWP-App\Package.appxmanifest">
+      <SubType>Designer</SubType>
+    </None>
+    <None Include="RPCS3-UWP_TemporaryKey.pfx" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="FrontendHost\MinimalHost.cpp" />
+    <ClCompile Include="FrontendHost\SampleInputMappingHost.cpp" />
+    <ClCompile Include="FrontendHost\UWP-App\App.cpp" />
+    <ClCompile Include="FrontendHost\UWP-App\D3D12Renderer.cpp" />
+    <ClCompile Include="FrontendHost\UWP-App\XamlApp.xaml.cpp" />
+    <ClCompile Include="FrontendHost\UWP-App\XamlPage.xaml.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="FrontendHost\MinimalHost.h" />
+    <ClInclude Include="FrontendHost\SampleInputMappingHost.h" />
+    <ClInclude Include="FrontendHost\UWP-App\D3D12Renderer.h" />
+    <ClInclude Include="FrontendHost\UWP-App\FrontendRuntime.h" />
+    <ClInclude Include="FrontendHost\UWP-App\XamlApp.xaml.h" />
+    <ClInclude Include="FrontendHost\UWP-App\XamlPage.xaml.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Page Include="FrontendHost\UWP-App\XamlPage.xaml" />
+    <ApplicationDefinition Include="FrontendHost\UWP-App\XamlApp.xaml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Assets\BadgeLogo.scale-100.png" />
+    <Image Include="Assets\BadgeLogo.scale-125.png" />
+    <Image Include="Assets\BadgeLogo.scale-150.png" />
+    <Image Include="Assets\BadgeLogo.scale-200.png" />
+    <Image Include="Assets\BadgeLogo.scale-400.png" />
+    <Image Include="Assets\LargeTile.scale-100.png" />
+    <Image Include="Assets\LargeTile.scale-125.png" />
+    <Image Include="Assets\LargeTile.scale-150.png" />
+    <Image Include="Assets\LargeTile.scale-200.png" />
+    <Image Include="Assets\LargeTile.scale-400.png" />
+    <Image Include="Assets\SmallTile.scale-100.png" />
+    <Image Include="Assets\SmallTile.scale-125.png" />
+    <Image Include="Assets\SmallTile.scale-150.png" />
+    <Image Include="Assets\SmallTile.scale-200.png" />
+    <Image Include="Assets\SmallTile.scale-400.png" />
+    <Image Include="Assets\SplashScreen.scale-100.png" />
+    <Image Include="Assets\SplashScreen.scale-125.png" />
+    <Image Include="Assets\SplashScreen.scale-150.png" />
+    <Image Include="Assets\SplashScreen.scale-200.png" />
+    <Image Include="Assets\SplashScreen.scale-400.png" />
+    <Image Include="Assets\Square150x150Logo.scale-100.png" />
+    <Image Include="Assets\Square150x150Logo.scale-125.png" />
+    <Image Include="Assets\Square150x150Logo.scale-150.png" />
+    <Image Include="Assets\Square150x150Logo.scale-200.png" />
+    <Image Include="Assets\Square150x150Logo.scale-400.png" />
+    <Image Include="Assets\Square44x44Logo.altform-lightunplated_targetsize-16.png" />
+    <Image Include="Assets\Square44x44Logo.altform-lightunplated_targetsize-24.png" />
+    <Image Include="Assets\Square44x44Logo.altform-lightunplated_targetsize-256.png" />
+    <Image Include="Assets\Square44x44Logo.altform-lightunplated_targetsize-32.png" />
+    <Image Include="Assets\Square44x44Logo.altform-lightunplated_targetsize-48.png" />
+    <Image Include="Assets\Square44x44Logo.altform-unplated_targetsize-16.png" />
+    <Image Include="Assets\Square44x44Logo.altform-unplated_targetsize-24.png" />
+    <Image Include="Assets\Square44x44Logo.altform-unplated_targetsize-256.png" />
+    <Image Include="Assets\Square44x44Logo.altform-unplated_targetsize-32.png" />
+    <Image Include="Assets\Square44x44Logo.altform-unplated_targetsize-48.png" />
+    <Image Include="Assets\Square44x44Logo.scale-100.png" />
+    <Image Include="Assets\Square44x44Logo.scale-125.png" />
+    <Image Include="Assets\Square44x44Logo.scale-150.png" />
+    <Image Include="Assets\Square44x44Logo.scale-200.png" />
+    <Image Include="Assets\Square44x44Logo.scale-400.png" />
+    <Image Include="Assets\Square44x44Logo.targetsize-16.png" />
+    <Image Include="Assets\Square44x44Logo.targetsize-24.png" />
+    <Image Include="Assets\Square44x44Logo.targetsize-256.png" />
+    <Image Include="Assets\Square44x44Logo.targetsize-32.png" />
+    <Image Include="Assets\Square44x44Logo.targetsize-48.png" />
+    <Image Include="Assets\StoreLogo.scale-100.png" />
+    <Image Include="Assets\StoreLogo.scale-125.png" />
+    <Image Include="Assets\StoreLogo.scale-150.png" />
+    <Image Include="Assets\StoreLogo.scale-200.png" />
+    <Image Include="Assets\StoreLogo.scale-400.png" />
+    <Image Include="Assets\WideTile.scale-100.png" />
+    <Image Include="Assets\WideTile.scale-125.png" />
+    <Image Include="Assets\WideTile.scale-150.png" />
+    <Image Include="Assets\WideTile.scale-200.png" />
+    <Image Include="Assets\WideTile.scale-400.png" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

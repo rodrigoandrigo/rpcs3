@@ -37,6 +37,30 @@
 #include "util/sysinfo.hpp"
 #include "util/serialization.hpp"
 
+namespace
+{
+#ifdef RPCS3_UWP
+	struct uwp_spu_interpreter_restart {};
+	thread_local bool uwp_spu_interpreter_active = false;
+	struct uwp_spu_interpreter_scope
+	{
+		uwp_spu_interpreter_scope() { uwp_spu_interpreter_active = true; }
+		~uwp_spu_interpreter_scope() { uwp_spu_interpreter_active = false; }
+	};
+#endif
+	void escape_spu_interpreter(spu_thread* spu)
+	{
+#ifdef RPCS3_UWP
+		if (!spu->jit)
+		{
+			if (uwp_spu_interpreter_active) throw uwp_spu_interpreter_restart{};
+			return;
+		}
+#endif
+		spu_runtime::g_escape(spu);
+	}
+}
+
 #if defined(ARCH_X64)
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -1576,7 +1600,9 @@ void spu_thread::cpu_task()
 	}
 	else
 	{
+#ifndef RPCS3_UWP
 		ensure(spu_runtime::g_interpreter);
+#endif
 
 		allow_interrupts_in_cpu_work = true;
 
@@ -1588,7 +1614,19 @@ void spu_thread::cpu_task()
 					break;
 			}
 
+#ifdef RPCS3_UWP
+			try
+			{
+				uwp_spu_interpreter_scope interpreter_scope;
+				spu_recompiler_base::old_interpreter(*this, _ptr<u8>(0), nullptr);
+			}
+			catch (const uwp_spu_interpreter_restart&)
+			{
+				// Re-enter at the updated PC after an interrupt or STOP action.
+			}
+#else
 			spu_runtime::g_interpreter(*this, _ptr<u8>(0), nullptr);
+#endif
 		}
 
 		allow_interrupts_in_cpu_work = false;
@@ -1694,7 +1732,7 @@ void spu_thread::cpu_work()
 	if (gen_interrupt)
 	{
 		// Interrupt! escape everything and restart execution
-		spu_runtime::g_escape(this);
+		escape_spu_interpreter(this);
 	}
 }
 
@@ -3878,7 +3916,7 @@ bool spu_thread::do_mfc(bool can_escape, bool must_finish)
 
 		if (can_escape && check_mfc_interrupts(pc + 4))
 		{
-			spu_runtime::g_escape(this);
+			escape_spu_interpreter(this);
 		}
 
 		if (!pending)
@@ -4956,7 +4994,7 @@ bool spu_thread::process_mfc_cmd()
 			if (check_mfc_interrupts(pc + 4))
 			{
 				do_mfc(false);
-				spu_runtime::g_escape(this);
+				escape_spu_interpreter(this);
 			}
 
 			return true;
@@ -4998,6 +5036,7 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 		// No reservation to be lost in the first place
 		return false;
 	}
+	rsx::cpu_memory_access memory_access(addr, 128);
 
 	if ((vm::reservation_acquire(addr) & -128) != rtime)
 	{
@@ -5100,6 +5139,7 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 
 bool spu_thread::reservation_check(u32 addr, u32 hash, atomic_t<u64, 128>* range_lock)
 {
+	rsx::cpu_memory_access memory_access(addr, 128);
 	if ((addr >> 28) < 2 || (addr >> 28) == 0xd)
 	{
 		// Always-allocated memory does not need strict checking (vm::main or vm::stack)
@@ -5254,6 +5294,14 @@ std::pair<u32, u32> spu_thread::read_dec() const
 {
 	const u64 res = ch_dec_value - (is_dec_frozen ? 0 : (get_timebased_time() - ch_dec_start_timestamp));
 	return {static_cast<u32>(res), static_cast<u32>(res >> 32)};
+}
+
+static bool compare_privileged_reservation(u32 address, const spu_rdata_t& expected, const spu_rdata_t* memory)
+{
+	// Keep the lease confined to the actual comparison. Holding it across
+	// event sleeps would stop the GPU which may produce the awaited event.
+	rsx::cpu_memory_access memory_access(address, 128);
+	return cmp_rdata(expected, *memory);
 }
 
 spu_thread::ch_events_t spu_thread::get_events(u64 mask_hint, bool waiting, bool reading)
@@ -5724,7 +5772,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 				{
 					set_lr = true;
 				}
-				else if (!cmp_rdata(rdata, *resrv_mem))
+				else if (!compare_privileged_reservation(raddr, rdata, resrv_mem))
 				{
 					if (vm::reservation_acquire(raddr) == rtime)
 					{
@@ -5858,7 +5906,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 						// Abort notifications are handled specially for performance reasons
 						if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(raddr, rtime); wait_var)
 						{
-							if (!cmp_rdata(rdata, *resrv_mem))
+							if (!compare_privileged_reservation(raddr, rdata, resrv_mem))
 							{
 								raddr = 0;
 								set_events(SPU_EVENT_LR);
@@ -5878,7 +5926,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 #ifdef __linux__
 					if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(_raddr, rtime); wait_var)
 					{
-						if (!cmp_rdata(rdata, *resrv_mem))
+						if (!compare_privileged_reservation(raddr, rdata, resrv_mem))
 						{
 							raddr = 0;
 							set_events(SPU_EVENT_LR);
@@ -5924,7 +5972,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 						{
 							set_lr = true;
 						}
-						else if (!cmp_rdata(_this->rdata, *_this->resrv_mem))
+						else if (!compare_privileged_reservation(raddr, _this->rdata, _this->resrv_mem))
 						{
 							auto& wait_addrs = _this->raddr_busy_wait_addr;
 
@@ -5958,7 +6006,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 
 					if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(_raddr, rtime); wait_var)
 					{
-						if (!cmp_rdata(rdata, *resrv_mem))
+						if (!compare_privileged_reservation(raddr, rdata, resrv_mem))
 						{
 							raddr = 0;
 							set_events(SPU_EVENT_LR);
@@ -6404,7 +6452,7 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 			// Check interrupts in case count is 1
 			if (check_mfc_interrupts(pc + 4))
 			{
-				spu_runtime::g_escape(this);
+				escape_spu_interpreter(this);
 			}
 		}
 
@@ -6445,7 +6493,7 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 			// Check interrupts in case count is 1
 			if (check_mfc_interrupts(pc + 4))
 			{
-				spu_runtime::g_escape(this);
+				escape_spu_interpreter(this);
 			}
 		}
 
@@ -6976,11 +7024,11 @@ void spu_thread::halt()
 
 		int_ctrl[2].set(SPU_INT2_STAT_SPU_HALT_OR_STEP_INT);
 
-		spu_runtime::g_escape(this);
+		escape_spu_interpreter(this);
 	}
 
 	spu_log.fatal("Halt");
-	spu_runtime::g_escape(this);
+	escape_spu_interpreter(this);
 }
 
 void spu_thread::fast_call(u32 ls_addr)

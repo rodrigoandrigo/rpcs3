@@ -70,7 +70,10 @@ void perf_monitor::operator()()
 			}
 
 			msg.clear();
-			fmt::append(msg, "CPU Usage: Total: %.1f%%", total_usage);
+			if (total_usage == total_usage)
+				fmt::append(msg, "CPU Usage: Total: %.1f%%", total_usage);
+			else
+				msg += "CPU Usage: Total: unavailable";
 
 			if (!per_core_usage.empty())
 			{

@@ -4,20 +4,24 @@
 #include "Utilities/File.h"
 
 mouse_config::mouse_config()
-	: cfg_name(fs::get_config_dir(true) + "config_mouse.yml")
 {
+}
+
+std::string mouse_config::cfg_name() const
+{
+	return fs::get_config_dir(true) + "config_mouse.yml";
 }
 
 bool mouse_config::exist() const
 {
-	return fs::is_file(cfg_name);
+	return fs::is_file(cfg_name());
 }
 
 bool mouse_config::load()
 {
 	g_cfg_mouse.from_default();
 
-	if (fs::file cfg_file{cfg_name, fs::read})
+	if (fs::file cfg_file{cfg_name(), fs::read})
 	{
 		if (const std::string content = cfg_file.to_string(); !content.empty())
 		{
@@ -30,7 +34,7 @@ bool mouse_config::load()
 
 void mouse_config::save()
 {
-	fs::pending_file file(cfg_name);
+	fs::pending_file file(cfg_name());
 
 	if (file.file)
 	{

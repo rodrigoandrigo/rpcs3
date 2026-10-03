@@ -205,13 +205,20 @@ void cfg_input::save(const std::string& title_id, const std::string& config_file
 }
 
 cfg_input_configurations::cfg_input_configurations()
-	: path(rpcs3::utils::get_input_config_root() + "/active_input_configurations.yml")
 {
+}
+
+std::string cfg_input_configurations::path() const
+{
+	// The embedded/UWP host supplies its brokered state root through
+	// fs::set_host_config_dir() during rpcs3_core_initialize(). Do not resolve
+	// it from a global constructor while the DLL loader lock is held.
+	return rpcs3::utils::get_input_config_root() + "/active_input_configurations.yml";
 }
 
 bool cfg_input_configurations::load()
 {
-	if (fs::file cfg_file{ path, fs::read })
+	if (fs::file cfg_file{ path(), fs::read })
 	{
 		return from_string(cfg_file.to_string());
 	}
@@ -222,10 +229,11 @@ bool cfg_input_configurations::load()
 
 void cfg_input_configurations::save() const
 {
-	input_log.notice("Saving input configurations config to '%s'", path);
+	const std::string cfg_path = path();
+	input_log.notice("Saving input configurations config to '%s'", cfg_path);
 
-	if (!cfg::node::save(path))
+	if (!cfg::node::save(cfg_path))
 	{
-		input_log.error("Failed to save input configurations config to '%s' (error=%s)", path, fs::g_tls_error);
+		input_log.error("Failed to save input configurations config to '%s' (error=%s)", cfg_path, fs::g_tls_error);
 	}
 }

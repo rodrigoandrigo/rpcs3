@@ -3,6 +3,7 @@
 
 #ifdef _WIN32
 	#include <Windows.h>
+	#include <winrt/base.h>
 #else
 	#include <dlfcn.h>
 #endif
@@ -21,7 +22,9 @@ namespace utils
 
 	bool dynamic_library::load(const std::string& path)
 	{
-#ifdef _WIN32
+#ifdef RPCS3_UWP
+		m_handle = LoadPackagedLibrary(winrt::to_hstring(path).c_str(), 0);
+#elif defined(_WIN32)
 		m_handle = LoadLibraryA(path.c_str());
 #else
 		m_handle = dlopen(path.c_str(), RTLD_LAZY);
@@ -32,7 +35,11 @@ namespace utils
 #ifdef _WIN32
 	bool dynamic_library::load(const std::wstring& path)
 	{
+#ifdef RPCS3_UWP
+		m_handle = LoadPackagedLibrary(path.c_str(), 0);
+#else
 		m_handle = LoadLibraryW(path.c_str());
+#endif
 		return loaded();
 	}
 #endif
@@ -68,7 +75,13 @@ namespace utils
 
 	void* get_proc_address(const char* lib, const char* name)
 	{
-#ifdef _WIN32
+#ifdef RPCS3_UWP
+		// Optional system APIs are SDK imports, never unrestricted ntdll loading.
+		if (std::strcmp(name, "SetThreadDescription") == 0 &&
+			(_stricmp(lib, "Kernel32.dll") == 0 || _stricmp(lib, "KernelBase.dll") == 0))
+			return reinterpret_cast<void*>(&SetThreadDescription);
+		return nullptr;
+#elif defined(_WIN32)
 		return reinterpret_cast<void*>(GetProcAddress(GetModuleHandleA(lib), name));
 #else
 		return dlsym(dlopen(lib, RTLD_NOLOAD), name);

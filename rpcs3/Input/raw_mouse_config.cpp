@@ -69,7 +69,7 @@ std::string raw_mouse_config::get_button_name(s32 button_code)
 
 std::string raw_mouse_config::get_key_name(s32 scan_code)
 {
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 	TCHAR name_buf[MAX_PATH] {};
 	if (!GetKeyNameTextW(scan_code, name_buf, MAX_PATH))
 	{
@@ -77,6 +77,10 @@ std::string raw_mouse_config::get_key_name(s32 scan_code)
 		return {};
 	}
 	return wchar_to_utf8(name_buf);
+#elif defined(RPCS3_UWP)
+	// Desktop raw input is unavailable in UWP. Preserve the configured scan
+	// code as a diagnostic label; this is not a localized keyboard name.
+	return fmt::format("Scan code %d", scan_code);
 #else
 	static_cast<void>(scan_code);
 	return "";

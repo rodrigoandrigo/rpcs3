@@ -1,12 +1,14 @@
 #include "stdafx.h"
 #include "pad_thread.h"
 #include "product_info.h"
+#ifndef RPCS3_UWP
 #include "ds3_pad_handler.h"
 #include "ds4_pad_handler.h"
 #include "dualsense_pad_handler.h"
 #include "skateboard_pad_handler.h"
 #include "ps_move_handler.h"
-#ifdef _WIN32
+#endif
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 #include "xinput_pad_handler.h"
 #include "mm_joystick_handler.h"
 #elif HAVE_LIBEVDEV
@@ -15,7 +17,7 @@
 #ifdef HAVE_SDL3
 #include "sdl_pad_handler.h"
 #endif
-#ifndef ANDROID
+#if !defined(ANDROID) && !defined(RPCS3_UWP)
 #include "keyboard_pad_handler.h"
 #endif
 #include "Emu/Io/Null/NullPadHandler.h"
@@ -154,7 +156,7 @@ void pad_thread::Init()
 
 	input_log.trace("Using pad config:\n%s", g_cfg_input);
 
-#ifndef ANDROID
+#if !defined(ANDROID) && !defined(RPCS3_UWP)
 	std::shared_ptr<keyboard_pad_handler> keyptr;
 #endif
 
@@ -177,7 +179,7 @@ void pad_thread::Init()
 		{
 			if (handler_type == pad_handler::keyboard)
 			{
-#ifndef ANDROID
+#if !defined(ANDROID) && !defined(RPCS3_UWP)
 				keyptr = std::make_shared<keyboard_pad_handler>();
 				keyptr->moveToThread(static_cast<QThread*>(m_curthread));
 				keyptr->SetTargetWindow(static_cast<QWindow*>(m_curwindow));
@@ -857,12 +859,22 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 	case pad_handler::null:
 		return std::make_shared<NullPadHandler>();
 	case pad_handler::keyboard:
-#ifdef ANDROID
+#if defined(ANDROID) || defined(RPCS3_UWP)
 		return std::make_shared<NullPadHandler>();
 #else
 		return std::make_shared<keyboard_pad_handler>();
 #endif
 	case pad_handler::ds3:
+#ifdef RPCS3_UWP
+	case pad_handler::ds4:
+	case pad_handler::dualsense:
+	case pad_handler::skateboard:
+	case pad_handler::move:
+	case pad_handler::xinput:
+	case pad_handler::mm:
+		input_log.error("Desktop controller backend unavailable in UWP; select SDL/WGI");
+		return std::make_shared<NullPadHandler>();
+#else
 		return std::make_shared<ds3_pad_handler>();
 	case pad_handler::ds4:
 		return std::make_shared<ds4_pad_handler>();
@@ -872,7 +884,8 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 		return std::make_shared<skateboard_pad_handler>();
 	case pad_handler::move:
 		return std::make_shared<ps_move_handler>();
-#ifdef _WIN32
+#endif
+#if defined(_WIN32) && !defined(RPCS3_UWP)
 	case pad_handler::xinput:
 		return std::make_shared<xinput_pad_handler>();
 	case pad_handler::mm:

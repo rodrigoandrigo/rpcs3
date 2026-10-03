@@ -1,5 +1,17 @@
 #include "stdafx.h"
 #include "RSXThread.h"
+#include "Core/RSXCpuMemoryAccess.hpp"
+
+rsx::cpu_memory_access::cpu_memory_access(u32 address, u32 length) {reset(address, length);}
+rsx::cpu_memory_access::~cpu_memory_access() {if (renderer) renderer->end_cpu_memory_access();}
+void rsx::cpu_memory_access::reset(u32 address, u32 length)
+{
+	auto* next = get_current_renderer();
+	// Acquire the replacement before releasing an existing batch/nested lease.
+	if (!next || !next->begin_cpu_memory_access(address, length)) next = nullptr;
+	if (renderer) renderer->end_cpu_memory_access();
+	renderer = next;
+}
 
 #include "Capture/rsx_capture.h"
 #include "Common/surface_store.h"

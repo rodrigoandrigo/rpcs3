@@ -23,6 +23,9 @@ extern "C" {
 }
 constexpr int averror_eof = AVERROR_EOF; // workaround for old-style-cast error
 constexpr int averror_invalid_data = AVERROR_INVALIDDATA; // workaround for old-style-cast error
+#ifdef RPCS3_UWP
+#include "Embedded/ffmpeg_fs_io.h"
+#endif
 #ifdef _MSC_VER
 #pragma warning(pop)
 #else
@@ -187,7 +190,13 @@ namespace utils
 		AVFormatContext* av_format_ctx = avformat_alloc_context();
 
 		// Open input file
-		if (int err = avformat_open_input(&av_format_ctx, path.c_str(), nullptr, &av_dict_opts); err < 0)
+#ifdef RPCS3_UWP
+		rpcs3::embedded::ffmpeg_fs_io input;
+		const int open_result = input.open_input(av_format_ctx, path, &av_dict_opts);
+#else
+		const int open_result = avformat_open_input(&av_format_ctx, path.c_str(), nullptr, &av_dict_opts);
+#endif
+		if (int err = open_result; err < 0)
 		{
 			// Failed to open file
 			av_dict_free(&av_dict_opts);
@@ -282,6 +291,21 @@ namespace utils
 		ctx video{};
 
 		AVFormatContext* format_context = nullptr;
+#ifdef RPCS3_UWP
+		std::unique_ptr<rpcs3::embedded::ffmpeg_fs_io> file_io;
+#endif
+		int close_output_io()
+		{
+#ifdef RPCS3_UWP
+			if (file_io) {
+				const int result = file_io->flush();
+				if (format_context) format_context->pb = nullptr;
+				file_io.reset();
+				return result;
+			}
+#endif
+			return format_context && format_context->pb ? avio_closep(&format_context->pb) : 0;
+		}
 		SwrContext* swr = nullptr;
 		SwsContext* sws = nullptr;
 		std::function<void()> kill_callback = nullptr;
@@ -562,7 +586,13 @@ namespace utils
 
 			// Get format from audio file
 			av.format_context = avformat_alloc_context();
-			if (int err = avformat_open_input(&av.format_context, path.c_str(), nullptr, nullptr); err < 0)
+#ifdef RPCS3_UWP
+			av.file_io = std::make_unique<rpcs3::embedded::ffmpeg_fs_io>();
+			const int open_result = av.file_io->open_input(av.format_context, path, nullptr);
+#else
+			const int open_result = avformat_open_input(&av.format_context, path.c_str(), nullptr, nullptr);
+#endif
+			if (int err = open_result; err < 0)
 			{
 				media_log.error("audio_decoder: Could not open file '%s'. Error: %d='%s'", path, err, av_error_to_string(err));
 				has_error = true;
@@ -1333,9 +1363,17 @@ namespace utils
 			}
 
 			// open the output file, if needed
-			if (!(av.format_context->flags & AVFMT_NOFILE))
+			if (!(av.format_context->oformat->flags & AVFMT_NOFILE))
 			{
-				if (int err = avio_open(&av.format_context->pb, path.c_str(), AVIO_FLAG_WRITE); err != 0)
+#ifdef RPCS3_UWP
+				av.file_io = std::make_unique<rpcs3::embedded::ffmpeg_fs_io>();
+				const int open_result = av.file_io->open(path, true) ? 0 : AVERROR(EIO);
+				av.format_context->pb = av.file_io->get();
+				av.format_context->flags |= AVFMT_FLAG_CUSTOM_IO;
+#else
+				const int open_result = avio_open(&av.format_context->pb, path.c_str(), AVIO_FLAG_WRITE);
+#endif
+				if (int err = open_result; err != 0)
 				{
 					media_log.error("video_encoder: avio_open failed. Error: %d='%s'", err, av_error_to_string(err));
 					has_error = true;
@@ -1347,7 +1385,7 @@ namespace utils
 			{
 				media_log.error("video_encoder: avformat_write_header failed. Error: %d='%s'", err, av_error_to_string(err));
 
-				if (int err = avio_closep(&av.format_context->pb); err != 0)
+				if (int err = av.close_output_io(); err != 0)
 				{
 					media_log.error("video_encoder: avio_closep failed. Error: %d='%s'", err, av_error_to_string(err));
 				}
@@ -1726,7 +1764,7 @@ namespace utils
 				media_log.error("video_encoder: av_write_trailer failed. Error: %d='%s'", err, av_error_to_string(err));
 			}
 
-			if (int err = avio_closep(&av.format_context->pb); err != 0)
+			if (int err = av.close_output_io(); err != 0)
 			{
 				media_log.error("video_encoder: avio_closep failed. Error: %d='%s'", err, av_error_to_string(err));
 			}

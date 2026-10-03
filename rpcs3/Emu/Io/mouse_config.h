@@ -7,8 +7,6 @@ struct mouse_config final : cfg::node
 {
 	mouse_config();
 
-	const std::string cfg_name;
-
 	cfg::string mouse_button_1{ this, "Button 1", "Mouse Left", true };
 	cfg::string mouse_button_2{ this, "Button 2", "Mouse Right", true };
 	cfg::string mouse_button_3{ this, "Button 3", "Mouse Middle", true };
@@ -25,6 +23,9 @@ struct mouse_config final : cfg::node
 	void save();
 
 	cfg::string& get_button(int code);
+
+private:
+	std::string cfg_name() const;
 };
 
 extern mouse_config g_cfg_mouse;

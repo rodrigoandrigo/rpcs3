@@ -13,6 +13,8 @@
 #include "Crypto/unself.h"
 #include "Crypto/unedat.h"
 #include "Loader/ISO.h"
+#include "Loader/PUP.h"
+#include "Loader/TAR.h"
 
 #include <charconv>
 #include <thread>
@@ -101,6 +103,60 @@ namespace rpcs3::utils
 		}
 
 		return worker();
+	}
+
+	bool install_firmware(const std::string& path)
+	{
+		sys_log.success("Installing firmware: %s", path);
+		fs::file pup_file(path);
+		if (!pup_file)
+		{
+			sys_log.error("Cannot open firmware image: %s", fs::g_tls_error);
+			return false;
+		}
+		pup_object pup(std::move(pup_file));
+		if (static_cast<pup_error>(pup) != pup_error::ok)
+		{
+			sys_log.error("Invalid firmware image: %s", pup.get_formatted_error());
+			return false;
+		}
+		fs::file update_database = pup.get_file(0x300);
+		if (!update_database)
+		{
+			sys_log.error("Firmware package database is missing");
+			return false;
+		}
+		tar_object updates(update_database);
+		auto names = updates.get_filenames();
+		names.erase(std::remove_if(names.begin(), names.end(), [](const std::string& name) {
+			return name.find("dev_flash_") == umax;
+		}), names.end());
+		if (names.empty() || !vfs::mount("/dev_flash", g_cfg_vfs.get_dev_flash()))
+		{
+			sys_log.error("Firmware contains no dev_flash packages or the destination cannot be mounted");
+			return false;
+		}
+		for (const std::string& name : names)
+		{
+			auto stream = updates.get_file(name);
+			if (!stream) return false;
+			if (stream->m_file_handler)
+				stream->m_file_handler->handle_file_op(*stream, 0, stream->get_size(umax), nullptr);
+			fs::file encrypted = fs::make_stream(std::move(stream->data));
+			SCEDecrypter decryptor(encrypted);
+			decryptor.LoadHeaders();
+			decryptor.LoadMetadata(SCEPKG_ERK, SCEPKG_RIV);
+			decryptor.DecryptData();
+			auto files = decryptor.MakeFile();
+			if (files.size() < 3 || !tar_object(files[2]).extract())
+			{
+				sys_log.error("Unable to extract firmware package: %s", name);
+				return false;
+			}
+		}
+		Emu.Init();
+		sys_log.success("Firmware installation completed");
+		return true;
 	}
 
 	std::vector<std::pair<std::string, u64>> get_vfs_disk_usage()

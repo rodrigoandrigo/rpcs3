@@ -65,7 +65,14 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 		// Wait for the duplicate
 		while (!add_loc->compiled)
 		{
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(push)
+#pragma warning(disable: 4996) // Preserve the existing pointer-width atomic wait.
+#endif
 			add_loc->compiled.wait(nullptr);
+#if defined(_MSC_VER) && defined(RPCS3_UWP)
+#pragma warning(pop)
+#endif
 		}
 
 		return add_loc->compiled;

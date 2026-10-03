@@ -7,20 +7,25 @@ cfg_recording g_cfg_recording;
 
 cfg_recording::cfg_recording()
 	: cfg::node()
-	, path(fs::get_config_dir(true) + "recording.yml")
 {
+}
+
+std::string cfg_recording::path() const
+{
+	return fs::get_config_dir(true) + "recording.yml";
 }
 
 bool cfg_recording::load()
 {
-	cfg_log.notice("Loading recording config from '%s'", path);
+	const std::string config_path = path();
+	cfg_log.notice("Loading recording config from '%s'", config_path);
 
-	if (fs::file cfg_file{path, fs::read})
+	if (fs::file cfg_file{config_path, fs::read})
 	{
 		return from_string(cfg_file.to_string());
 	}
 
-	cfg_log.notice("Recording config missing. Using default settings. Path: %s", path);
+	cfg_log.notice("Recording config missing. Using default settings. Path: %s", config_path);
 	from_default();
 	save();
 	return false;
@@ -28,10 +33,11 @@ bool cfg_recording::load()
 
 void cfg_recording::save() const
 {
-	cfg_log.notice("Saving recording config to '%s'", path);
+	const std::string config_path = path();
+	cfg_log.notice("Saving recording config to '%s'", config_path);
 
-	if (!cfg::node::save(path))
+	if (!cfg::node::save(config_path))
 	{
-		cfg_log.error("Failed to save recording config to '%s' (error=%s)", path, fs::g_tls_error);
+		cfg_log.error("Failed to save recording config to '%s' (error=%s)", config_path, fs::g_tls_error);
 	}
 }

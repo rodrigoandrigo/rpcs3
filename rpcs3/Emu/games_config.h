@@ -8,6 +8,7 @@ class games_config
 public:
 	games_config();
 	virtual ~games_config();
+	void initialize();
 
 	void set_save_on_dirty(bool enabled) { m_save_on_dirty = enabled; }
 	bool is_save_on_dirty() const { return m_save_on_dirty; }

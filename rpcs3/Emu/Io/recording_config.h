@@ -34,7 +34,8 @@ struct cfg_recording final : cfg::node
 
 	} audio{ this };
 
-	const std::string path;
+private:
+	std::string path() const;
 };
 
 extern cfg_recording g_cfg_recording;

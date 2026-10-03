@@ -132,7 +132,7 @@ public:
 	void reset();
 
 private:
-	const std::string m_path;
+	std::string path() const;
 };
 
 extern emulated_logitech_g27_config g_cfg_logitech_g27;

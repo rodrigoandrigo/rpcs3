@@ -4,7 +4,13 @@
 #include "Utilities/mutex.h"
 #include "Emu/system_config_types.h"
 
+#ifndef WITHOUT_OPENAL
 #include "alc.h"
+#else
+struct ALCdevice_struct;
+using ALCdevice = ALCdevice_struct;
+using ALCenum = int;
+#endif
 
 // Error Codes
 enum CellMicInError : u32
