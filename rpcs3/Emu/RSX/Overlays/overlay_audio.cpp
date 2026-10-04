@@ -15,7 +15,9 @@ namespace rsx
 		{
 			if (audio_path.empty()) return;
 
-			m_video_source = ensure(g_emu_callbacks.make_video_source());
+			// Embedded hosts may not provide a decoder for optional title audio.
+			m_video_source = g_emu_callbacks.make_video_source ? g_emu_callbacks.make_video_source() : nullptr;
+			if (!m_video_source) return;
 			m_video_source->set_audio_path(audio_path, audio_in_archive);
 
 			if (audio_in_archive)

@@ -6,6 +6,9 @@
 #endif
 
 #ifdef _WIN32
+#ifdef RPCS3_UWP_MESA
+extern "C" __declspec(dllimport) PROC WINAPI wglGetProcAddress(LPCSTR);
+#endif
 
 extern "C"
 {

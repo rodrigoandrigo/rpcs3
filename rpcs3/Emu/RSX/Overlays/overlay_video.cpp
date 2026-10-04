@@ -63,7 +63,9 @@ namespace rsx
 		{
 			if (video_path.empty()) return;
 
-			m_video_source = ensure(g_emu_callbacks.make_video_source());
+			// Keep the thumbnail when the host does not provide preview decoding.
+			m_video_source = g_emu_callbacks.make_video_source ? g_emu_callbacks.make_video_source() : nullptr;
+			if (!m_video_source) return;
 			m_video_source->set_update_callback([this]()
 			{
 				if (m_video_active)

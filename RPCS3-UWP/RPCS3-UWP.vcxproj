@@ -43,6 +43,8 @@
     <None Include="CMakeLists.txt" />
     <None Include="Build-Solution.ps1" />
     <None Include="Build-Core.ps1" />
+    <None Include="Build-Mesa.ps1" />
+    <None Include="mesa-uwp-x64.ini" />
     <None Include="Build-Host.ps1" />
     <None Include="Frontend\CMakeLists.txt" />
     <None Include="FrontendHost\CMakeLists.txt" />

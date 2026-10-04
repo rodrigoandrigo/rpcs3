@@ -3,6 +3,15 @@ if(NOT WIN32 OR NOT MSVC)
 endif()
 
 target_compile_definitions(rpcs3_emu PUBLIC RPCS3_UWP=1)
+if(RPCS3_UWP_MESA)
+    if(NOT RPCS3_UWP_D3D12)
+        message(FATAL_ERROR "Mesa output requires the D3D12 embedding presentation bridge")
+    endif()
+    if(NOT EXISTS "${RPCS3_UWP_MESA_ROOT}/src/gallium/targets/libgl-gdi/opengl32.lib")
+        message(FATAL_ERROR "Build RPCS3-UWP/Build-Mesa.ps1 before enabling RPCS3_UWP_MESA")
+    endif()
+    target_compile_definitions(rpcs3_emu PUBLIC RPCS3_UWP_MESA=1)
+endif()
 if(RPCS3_UWP_D3D12)
     file(GLOB embedded_d3d12_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Emu/RSX/D3D12/*.cpp")
     # Retired D2D/desktop overlays are not used by the embedded frontend.
@@ -14,7 +23,7 @@ endif()
 # Remove desktop backends and all USB peripheral implementations. With no
 # validated UWP USB transport, guest USB calls explicitly return ENOSYS.
 get_target_property(embedded_sources rpcs3_emu SOURCES)
-list(FILTER embedded_sources EXCLUDE REGEX "(^|/)(Audio/(Cubeb|XAudio2)/.*|Cell/lv2/sys_usbd|NP/upnp_handler|Io/(Buzz|Dimensions|GameTablet|GHLtar|GunCon3|Infinity|KamenRider|RB3MidiDrums|RB3MidiGuitar|RB3MidiKeyboard|Skylander|TopShotElite|TopShotFearmaster|Turntable|usb_device|usb_microphone|usb_vfs|usio|LogitechG27))\\.cpp$")
+list(FILTER embedded_sources EXCLUDE REGEX "(^|/)(Audio/Cubeb/.*|Audio/XAudio2/xaudio2_enumerator|Cell/lv2/sys_usbd|NP/upnp_handler|Io/(Buzz|Dimensions|GameTablet|GHLtar|GunCon3|Infinity|KamenRider|RB3MidiDrums|RB3MidiGuitar|RB3MidiKeyboard|Skylander|TopShotElite|TopShotFearmaster|Turntable|usb_device|usb_microphone|usb_vfs|usio|LogitechG27))\\.cpp$")
 set_property(TARGET rpcs3_emu PROPERTY SOURCES "${embedded_sources}")
 target_sources(rpcs3_emu PRIVATE
     Embedded/unsupported_usb.cpp
@@ -32,14 +41,23 @@ target_sources(rpcs3_emu PRIVATE
     Input/sdl_instance.cpp
     Input/sdl_pad_handler.cpp
 )
-target_link_libraries(rpcs3_emu PUBLIC 3rdparty::fusion)
+target_link_libraries(rpcs3_emu PUBLIC 3rdparty::fusion xaudio2)
 
 add_library(rpcs3_core SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/Embedded/core_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Embedded/host_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Embedded/brokered_files.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Embedded/audio_source.cpp
 )
 target_compile_definitions(rpcs3_core PRIVATE RPCS3_CORE_EXPORTS UNICODE _UNICODE)
+if(RPCS3_UWP_MESA)
+    target_sources(rpcs3_core PRIVATE Embedded/mesa_frame.cpp)
+    foreach(mesa_dll IN ITEMS src/gallium/targets/libgl-gdi/opengl32.dll src/gallium/targets/wgl/gallium_wgl.dll src/gallium/targets/libgl-gdi/dxil.dll)
+        add_custom_command(TARGET rpcs3_core POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RPCS3_UWP_MESA_ROOT}/${mesa_dll}" "$<TARGET_FILE_DIR:rpcs3_core>"
+            VERBATIM)
+    endforeach()
+endif()
 if(RPCS3_UWP_D3D12)
     target_compile_definitions(rpcs3_core PRIVATE RPCS3_UWP_D3D12=1)
     target_include_directories(rpcs3_core PRIVATE "${CMAKE_SOURCE_DIR}/3rdparty/minidx12")

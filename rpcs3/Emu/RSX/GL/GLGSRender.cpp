@@ -38,7 +38,7 @@ u64 GLGSRender::get_cycles()
 	return thread_ctrl::get_cycles(static_cast<named_thread<GLGSRender>&>(*this));
 }
 
-GLGSRender::GLGSRender(utils::serial* ar) noexcept : GSRender(ar)
+GLGSRender::GLGSRender(utils::serial* ar) : GSRender(ar)
 {
 	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", "v1.95");
 

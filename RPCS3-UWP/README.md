@@ -1,6 +1,6 @@
 # RPCS3-UWP
 
-RPCS3-UWP is an experimental UWP host for the RPCS3 PlayStation 3 emulator. It embeds a Qt-free RPCS3 core DLL, presents the emulator through an ImGui frontend, and displays the legacy Direct3D 12 renderer through the UWP application's swap chain.
+RPCS3-UWP is an experimental UWP host for the RPCS3 PlayStation 3 emulator. It embeds a Qt-free RPCS3 core DLL, presents the emulator through an ImGui frontend, and offers the restored Direct3D 12 renderer and OpenGL through Mesa Gallium D3D12 in the UWP application's swap chain.
 
 The project is intended for Windows UWP/AppContainer environments and Xbox development scenarios. It is not an upstream RPCS3 build and does not use the desktop Qt frontend.
 
@@ -49,6 +49,11 @@ Qt and desktop-only backends are not linked into the package. Desktop debugger w
 - Git for restoring pinned third-party sources when required.
 - SDL3-UWP source tree at `C:\Users\rodri\Dev1\Projetos\SDL3-uwp`.
 - `RPCS3-UWP_TemporaryKey.pfx` for local test-package signing.
+- Installed x64 `Microsoft.VCLibs.140.00` UWP framework version 14.0.33519.0
+  or newer (used by Meson's native compiler checks).
+- Python with Meson, Mako, PyYAML and a Ninja executable; MSYS2 Bison and Flex.
+  Set `RPCS3_MESON_PYTHON` to the Python executable containing these packages if
+  it is not the default `python` on PATH.
 
 The scripts enter the Visual Studio MSVC environment automatically. MSYS2/UCRT64 supplies the build shell and CMake, while UWP C++ code is compiled with MSVC.
 
@@ -78,13 +83,43 @@ Open `RPCS3-UWP\RPCS3-UWP.slnx` in Visual Studio, select `Release` and `x64`, an
 
 The solution performs the following operations automatically:
 
-1. Configures and builds the Qt-free `rpcs3-core.dll`.
+1. Builds the bundled Mesa UWP OpenGL libraries with Gallium D3D12 only, then configures and builds the Qt-free `rpcs3-core.dll`.
 2. Enables the experimental Direct3D 12 renderer.
 3. Uses the external SDL3-UWP source tree.
 4. Builds the ImGui frontend and UWP host.
 5. Creates the MSIX package.
 6. Signs the package with `RPCS3-UWP_TemporaryKey.pfx`.
 7. Verifies the resulting signature.
+
+## OpenGL through Mesa
+
+The renderer selector lists `Direct3D 12` first (the default) and
+`OpenGL (Mesa Gallium D3D12)` second. Select it under `Video/Renderer` while
+emulation is stopped. The stored RPCS3 configuration uses `OpenGL`; the display
+name identifies the packaged driver rather than the Windows desktop driver.
+
+The path is RPCS3's existing OpenGL RSX renderer → packaged Mesa `opengl32.dll`
+→ `gallium_wgl.dll` / Gallium D3D12 → the host's D3D12 presentation bridge.
+The Windows SDK redistributable `dxil.dll` is also packaged to validate and sign
+Mesa-generated DXIL shaders; `dxcompiler.dll` is not required or packaged.
+Neither the system desktop OpenGL implementation nor Qt is used. Mesa is built
+from `../3rdparty/mesa`; no Vulkan or software Gallium fallback is included.
+
+Build the layers individually with:
+
+```powershell
+.\RPCS3-UWP\Build-Mesa.ps1 -Python python  # Or the configured Meson Python executable
+.\RPCS3-UWP\Build-Core.ps1 -ExperimentalD3D12 -MesaOpenGL
+.\RPCS3-UWP\Build-Host.ps1 -MesaOpenGL
+```
+
+The initial presentation bridge reads the offscreen OpenGL back buffer on the
+CPU, flips its rows, uploads an immutable D3D12 texture and publishes it to the
+existing frontend. It uses a 1280×720 drawable; the frontend scales the result
+to the application area. This is not zero-copy and adds readback/upload cost.
+An OpenGL 4.3 core context and RPCS3's required extensions must be supported by
+the selected D3D12 adapter. Native build/probe success does not establish
+Xbox AppContainer compatibility or guest-game correctness.
 
 ## Build from PowerShell
 
@@ -161,6 +196,7 @@ After a successful build, audit the DLL imports and package manifest:
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File .\RPCS3-UWP\Audit-Uwp.ps1 `
     -Dll .\build-uwp-msvc\core\bin\rpcs3-core.dll `
+    -PackageDlls .\build-uwp-msvc\core\bin\opengl32.dll `
     -PackageManifest .\RPCS3-UWP\FrontendHost\UWP-App\Package.appxmanifest
 ```
 
@@ -189,10 +225,26 @@ The current source has been validated through:
 - Public C ABI compilation.
 - Brokered-path confinement tests.
 - D3D12 copy, readback, surface-coherency, MSAA, and shader-path tests.
+- Version 1.0.0.56: 34 configuration API checks (274 entries), including Mesa
+  selection/persistence and default ordering; a native OpenGL context and GPU
+  clear/readback test using Mesa 26.2.2 / Gallium D3D12 on an AMD Radeon RX 6600M.
+  Mesa links the UWP Store C++ runtime, not the desktop VC runtime.
 
 These checks are separate from installed-package, retail Xbox, real firmware, real PKG, game compatibility, performance, and Microsoft WACK testing. Those runtime tiers require appropriate hardware and user-supplied content.
 
 ## Troubleshooting
+
+### Title audio preview fails with `Verification failed (object: 0x0)`
+
+Version 1.0.0.58 uses XAudio2 for emulated game audio on the system default
+output device, without desktop endpoint enumeration or a Null-backend fallback.
+Title audio (`SND0.AT3`) is decoded asynchronously by the bundled FFmpeg decoder
+to 48 kHz stereo float PCM and played through XAudio2. Brokered filesystem and
+ISO sources use the existing virtual filesystem. Title previews loop until
+deactivated and follow the configured volume. Unsupported video previews retain
+their thumbnail. Decoder/output failures remain errors, not successful playback.
+Native build/configuration checks do not establish audible Xbox/game playback;
+that still requires validation on the target device with real content.
 
 ### Start remains in the library and reports a remote launch pending
 

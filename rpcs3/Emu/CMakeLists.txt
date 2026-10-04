@@ -589,7 +589,7 @@ target_sources(rpcs3_emu PRIVATE
     RSX/Utils/rsx_utils.cpp
 )
 
-if(NOT ANDROID AND NOT APPLE AND NOT RPCS3_BUILD_CORE_DLL)
+if(NOT ANDROID AND NOT APPLE AND (NOT RPCS3_BUILD_CORE_DLL OR RPCS3_UWP_MESA))
     target_sources(rpcs3_emu PRIVATE
         RSX/GL/GLCommonDecompiler.cpp
         RSX/GL/GLCompute.cpp

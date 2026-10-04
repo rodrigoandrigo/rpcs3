@@ -29,7 +29,7 @@ protected:
 public:
 	~GSRender() override;
 
-	GSRender(utils::serial* ar) noexcept;
+	GSRender(utils::serial* ar);
 
 	void set_continuous_mode(bool continuous_mode) { m_continuous_mode = continuous_mode; }
 

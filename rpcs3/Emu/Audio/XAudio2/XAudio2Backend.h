@@ -9,9 +9,14 @@
 #include <initguid.h>
 #include <xaudio2.h>
 #include <wrl/client.h>
+#ifndef RPCS3_UWP
 #include <MMDeviceAPI.h>
+#endif
 
-class XAudio2Backend final : public AudioBackend, public IXAudio2VoiceCallback, public IXAudio2EngineCallback, public IMMNotificationClient
+class XAudio2Backend final : public AudioBackend, public IXAudio2VoiceCallback, public IXAudio2EngineCallback
+#ifndef RPCS3_UWP
+    , public IMMNotificationClient
+#endif
 {
 public:
 	XAudio2Backend();
@@ -42,7 +47,9 @@ private:
 	IXAudio2SourceVoice* m_source_voice{};
 	bool m_com_init_success = false;
 
+#ifndef RPCS3_UWP
 	Microsoft::WRL::ComPtr<IMMDeviceEnumerator> m_device_enumerator{};
+#endif
 
 	// Protected by state callback mutex
 	std::string m_current_device{};
@@ -60,14 +67,15 @@ private:
 	void OnBufferStart(void* /* pBufferContext */) noexcept override {}
 	void OnBufferEnd(void* /* pBufferContext*/) noexcept override {}
 	void OnLoopEnd(void* /* pBufferContext */) noexcept override {}
-	void OnVoiceError(void* /* pBufferContext */, HRESULT /* Error */) noexcept override {}
+	void OnVoiceError(void* /* pBufferContext */, HRESULT Error) noexcept override { OnCriticalError(Error); }
 
 	// XAudio engine callbacks
 	void OnProcessingPassStart() noexcept override {};
 	void OnProcessingPassEnd() noexcept override {};
 	void OnCriticalError(HRESULT Error) noexcept override;
 
-	// IMMNotificationClient callbacks
+#ifndef RPCS3_UWP
+	// Desktop endpoint notifications are not available in Xbox AppContainer.
 	IFACEMETHODIMP_(ULONG) AddRef() override { return 1; };
 	IFACEMETHODIMP_(ULONG) Release() override { return 1; };
 	IFACEMETHODIMP QueryInterface(REFIID /*iid*/, void** /*object*/) override { return E_NOINTERFACE; };
@@ -76,6 +84,7 @@ private:
 	IFACEMETHODIMP OnDeviceRemoved(LPCWSTR /*device_id*/) override { return S_OK; };
 	IFACEMETHODIMP OnDeviceStateChanged(LPCWSTR /*device_id*/, DWORD /*new_state*/) override { return S_OK; };
 	IFACEMETHODIMP OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR new_default_device_id) override;
+#endif
 
 	void CloseUnlocked();
 };

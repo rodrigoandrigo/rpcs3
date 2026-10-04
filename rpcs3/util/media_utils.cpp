@@ -641,6 +641,13 @@ namespace utils
 				return;
 			}
 
+			if (int err = avcodec_parameters_to_context(av.audio.context, stream->codecpar); err < 0)
+			{
+				media_log.error("audio_decoder: Could not copy codec parameters: %d='%s'", err, av_error_to_string(err));
+				has_error = true;
+				return;
+			}
+
 			// Open decoder
 			if (int err = avcodec_open2(av.audio.context, av.audio.codec, nullptr); err < 0)
 			{
@@ -655,8 +662,8 @@ namespace utils
 
 			const int set_err = swr_alloc_set_opts2(&av.swr, &dst_channel_layout, dst_format,
 				sample_rate, &stream->codecpar->ch_layout,
-				static_cast<AVSampleFormat>(stream->codecpar->format),
-				stream->codecpar->sample_rate, 0, nullptr);
+				av.audio.context->sample_fmt,
+				av.audio.context->sample_rate, 0, nullptr);
 			if (set_err < 0)
 			{
 				media_log.error("audio_decoder: Failed to set resampler options: Error: %d='%s'", set_err, av_error_to_string(set_err));
@@ -701,7 +708,10 @@ namespace utils
 			// Iterate through frames
 			while (thread_ctrl::state() != thread_state::aborting && av_read_frame(av.format_context, packet) >= 0)
 			{
-				if (int err = avcodec_send_packet(av.audio.context, packet); err < 0)
+				if (packet->stream_index != static_cast<int>(stream_index)) { av_packet_unref(packet); continue; }
+				const int send_error = avcodec_send_packet(av.audio.context, packet);
+				av_packet_unref(packet);
+				if (int err = send_error; err < 0)
 				{
 					if (is_first_error)
 					{
@@ -735,7 +745,8 @@ namespace utils
 					// Resample frames
 					u8* buffer = nullptr;
 					const int align = 1;
-					const int buffer_size = av_samples_alloc(&buffer, nullptr, dst_channels, av.audio.frame->nb_samples, dst_format, align);
+					const int capacity = swr_get_out_samples(av.swr, av.audio.frame->nb_samples);
+					const int buffer_size = av_samples_alloc(&buffer, nullptr, dst_channels, capacity, dst_format, align);
 					if (buffer_size < 0)
 					{
 						media_log.error("audio_decoder: Error allocating buffer: %d='%s'", buffer_size, av_error_to_string(buffer_size));
@@ -743,7 +754,7 @@ namespace utils
 						return;
 					}
 
-					const int frame_count = swr_convert(av.swr, &buffer, av.audio.frame->nb_samples, const_cast<const uint8_t**>(av.audio.frame->data), av.audio.frame->nb_samples);
+					const int frame_count = swr_convert(av.swr, &buffer, capacity, const_cast<const uint8_t**>(av.audio.frame->data), av.audio.frame->nb_samples);
 					if (frame_count < 0)
 					{
 						media_log.error("audio_decoder: Error converting frame: %d='%s'", frame_count, av_error_to_string(frame_count));
@@ -756,14 +767,15 @@ namespace utils
 					// Append resampled frames to data
 					{
 						std::scoped_lock lock(m_mtx);
-						data.resize(m_size + buffer_size);
+						const u32 decoded_bytes = frame_count * dst_channels * sizeof(f32);
+						data.resize(m_size + decoded_bytes);
 
 						// The format is float 32bit per channel.
-						copy_samples<f32>(buffer, &data[m_size], buffer_size / sizeof(f32), m_swap_endianness);
+						if (decoded_bytes) copy_samples<f32>(buffer, &data[m_size], decoded_bytes / sizeof(f32), m_swap_endianness);
 
 						const s64 timestamp_ms = stream->time_base.den ? (1000 * av.audio.frame->best_effort_timestamp * stream->time_base.num) / stream->time_base.den : 0;
 						timestamps_ms.push_back({m_size, timestamp_ms});
-						m_size += buffer_size;
+						m_size += decoded_bytes;
 					}
 
 					if (buffer)

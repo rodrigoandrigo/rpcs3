@@ -161,8 +161,8 @@ class GLGSRender : public GSRender, public ::rsx::reports::ZCULL_control
 public:
 	u64 get_cycles() final;
 
-	GLGSRender(utils::serial* ar) noexcept;
-	GLGSRender() noexcept : GLGSRender(nullptr) {}
+	GLGSRender(utils::serial* ar);
+	GLGSRender() : GLGSRender(nullptr) {}
 	virtual ~GLGSRender();
 
 private:

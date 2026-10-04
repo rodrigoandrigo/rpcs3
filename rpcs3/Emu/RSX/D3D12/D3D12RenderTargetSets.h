@@ -33,7 +33,7 @@ std::array<std::vector<std::byte>, 2> download_depth_surface(ID3D12Resource*, su
     d3d12::sample_pattern = d3d12::sample_pattern::center);
 namespace utility
 {
-	std::vector<u8> get_rtt_indexes(surface_target color_target);
+	std::vector<u8> get_d3d12_rtt_indexes(surface_target color_target);
 	size_t get_aligned_pitch(surface_color_format format, u32 width);
 	size_t get_packed_pitch(surface_color_format format, u32 width);
 }
@@ -186,7 +186,7 @@ public:
 			rtt = std::make_pair(0, nullptr);
 		}
 
-		const auto rtt_indices = utility::get_rtt_indexes(set_surface_target);
+		const auto rtt_indices = utility::get_d3d12_rtt_indexes(set_surface_target);
 		if (!rtt_indices.empty())
 		{
 			m_bound_render_targets_config = { rtt_indices.front(), 0 };

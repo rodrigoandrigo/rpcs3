@@ -5,7 +5,25 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#ifdef RPCS3_UWP_MESA
+// Mesa gl.h declares GL 1.2/1.3 entry points that RPCS3 loads dynamically.
+// Keep its UWP-visible GL 1.1 declarations without colliding with our pointers.
+#define glTexImage3D mesa_header_glTexImage3D
+#define glTexSubImage3D mesa_header_glTexSubImage3D
+#define glSampleCoverage mesa_header_glSampleCoverage
+#define glBlendColor mesa_header_glBlendColor
+#define glBlendEquation mesa_header_glBlendEquation
+#define glActiveTexture mesa_header_glActiveTexture
+#endif
 #include "GL/gl.h"
+#ifdef RPCS3_UWP_MESA
+#undef glTexImage3D
+#undef glTexSubImage3D
+#undef glSampleCoverage
+#undef glBlendColor
+#undef glBlendEquation
+#undef glActiveTexture
+#endif
 #include <glext.h>
 typedef BOOL (WINAPI* PFNWGLSWAPINTERVALEXTPROC) (int interval);
 

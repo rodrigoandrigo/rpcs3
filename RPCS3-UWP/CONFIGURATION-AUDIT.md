@@ -16,8 +16,8 @@ ScreenScraper requests use PlayStation 3 system ID 59, as identified by the [off
 
 ## UWP restrictions
 
-- The host selects the experimental shared D3D12 renderer. The upstream renderer enum remains Null internally because the restored D3D12 backend is instantiated by the embedding adapter.
-- Audio output currently uses Null. Keyboard, mouse, camera, music, and microphone handlers are limited to the integrated Null implementations.
+- Builds with Mesa list `Direct3D 12` first/default and `OpenGL (Mesa Gallium D3D12)` second. The former maps to the upstream Null enum because the restored D3D12 backend is instantiated by the embedding adapter; the latter uses the upstream OpenGL enum and renderer. Core-only builds without Mesa retain the fixed D3D12 policy. Both use the host D3D12 presentation bridge; OpenGL currently adds CPU readback/upload.
+- Since 1.0.0.58, audio output uses XAudio2 on the system default device, with configurable buffering. Title audio previews use the bundled FFmpeg decoder and XAudio2. Desktop endpoint selection is unavailable. Keyboard, mouse, camera, guest music, and microphone handlers remain limited to the integrated Null implementations; these are separate from title preview playback.
 - This build lacks LLVM and uses CPU interpreters. Its decoder selections are managed by the host.
 - Vulkan and UPnP are excluded. Their settings are shown as unavailable.
 - VFS mount paths require brokered storage grants; displaying the existing paths does not allow arbitrary native-path access.
@@ -32,6 +32,11 @@ The native regression harness in `rpcs3/Embedded/tests/core_config_test.cpp` loa
 
 Temporary investigation instrumentation was removed in version 1.0.0.48.
 Normal RPCS3 debug configuration options and regression checks remain.
+
+Version 1.0.0.56 passed 34 API checks, including renderer ordering, Mesa OpenGL
+selection, preservation during host normalization, and rejection of Vulkan.
+The native Mesa test created an OpenGL 4.6 core context and passed GPU
+clear/readback through Gallium D3D12. This does not validate games or Xbox.
 
 Version 1.0.0.37 passed the 29 API checks and the native D3D12 CPU-access
 queue test over 100 iterations. The latter verifies pause service with an

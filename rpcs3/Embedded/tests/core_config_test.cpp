@@ -111,8 +111,17 @@ int main(int argc, char** argv)
     check(set("Log", "{SYS: Notice}") == 0, "apply log map");
     check(set("Log", "{SYS: InvalidLevel}") == RPCS3_CORE_INVALID_ARGUMENT, "reject invalid log level");
     check(set("Audio/Renderer", "Cubeb") == RPCS3_CORE_UNSUPPORTED_RENDERER, "reject unavailable backend");
-    check(entries.at("Audio/Enable Buffering").value == "false", "Null audio buffering disabled");
-    check(set("Audio/Enable Buffering", "true") != RPCS3_CORE_OK, "reject unsupported audio buffering");
+    if (entries.at("Video/Renderer").choices.find("Mesa Gallium D3D12") != std::string::npos) {
+        check(entries.at("Video/Renderer").choices == "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)",
+            "D3D12 first and Mesa OpenGL second");
+        check(set("Video/Renderer", "OpenGL (Mesa Gallium D3D12)") == 0, "select Mesa OpenGL");
+        snapshot();
+        check(entries.at("Video/Renderer").value == "OpenGL (Mesa Gallium D3D12)", "Mesa selection survives normalization");
+        check(set("Video/Renderer", "Vulkan") == RPCS3_CORE_UNSUPPORTED_RENDERER, "reject unavailable Vulkan");
+        check(set("Video/Renderer", "Direct3D 12") == 0, "restore D3D12");
+    }
+    check(entries.at("Audio/Renderer").value == "XAudio2", "UWP XAudio2 output selected");
+    check(set("Audio/Enable Buffering", "true") == RPCS3_CORE_OK, "XAudio2 audio buffering available");
     const std::string longValue(9000, 'x');
     check(set("Core/Use LLVM CPU", longValue) == 0, "apply long text");
     snapshot();

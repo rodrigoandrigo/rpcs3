@@ -17,6 +17,7 @@
 
 LOG_CHANNEL(XAudio);
 
+#ifndef RPCS3_UWP
 template <>
 void fmt_class_string<ERole>::format(std::string& out, u64 arg)
 {
@@ -51,11 +52,15 @@ void fmt_class_string<EDataFlow>::format(std::string& out, u64 arg)
 	});
 }
 
+#endif
+
 XAudio2Backend::XAudio2Backend()
 	: AudioBackend()
 {
 	Microsoft::WRL::ComPtr<IXAudio2> instance{};
+#ifndef RPCS3_UWP
 	Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator{};
+#endif
 
 	// In order to prevent errors on CreateMasteringVoice, apparently we need CoInitializeEx according to:
 	// https://docs.microsoft.com/en-us/windows/win32/api/xaudio2fx/nf-xaudio2fx-xaudio2createvolumemeter
@@ -76,6 +81,7 @@ XAudio2Backend::XAudio2Backend()
 		XAudio.error("RegisterForCallbacks() failed: %s (0x%08x)", std::system_category().message(hr), static_cast<u32>(hr));
 	}
 
+#ifndef RPCS3_UWP
 	// Try to register a listener for device changes
 	if (HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&enumerator)); FAILED(hr))
 	{
@@ -83,23 +89,29 @@ XAudio2Backend::XAudio2Backend()
 		return;
 	}
 
-	// All succeeded, "commit"
+#endif
+	// Commit the engine even when desktop endpoint enumeration is unavailable.
 	m_xaudio2_instance = std::move(instance);
+#ifndef RPCS3_UWP
 	m_device_enumerator = std::move(enumerator);
+#endif
 }
 
 XAudio2Backend::~XAudio2Backend()
 {
 	Close();
 
+#ifndef RPCS3_UWP
 	if (m_device_enumerator != nullptr)
 	{
 		m_device_enumerator->UnregisterEndpointNotificationCallback(this);
 		m_device_enumerator = nullptr;
 	}
+#endif
 
 	if (m_xaudio2_instance != nullptr)
 	{
+		m_xaudio2_instance->UnregisterForCallbacks(this);
 		m_xaudio2_instance->StopEngine();
 		m_xaudio2_instance = nullptr;
 	}
@@ -159,7 +171,9 @@ void XAudio2Backend::CloseUnlocked()
 		m_master_voice = nullptr;
 	}
 
-	m_device_enumerator->UnregisterEndpointNotificationCallback(this);
+#ifndef RPCS3_UWP
+	if (m_device_enumerator) m_device_enumerator->UnregisterEndpointNotificationCallback(this);
+#endif
 
 	m_playing = false;
 	m_last_sample.fill(0);
@@ -211,6 +225,7 @@ bool XAudio2Backend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSi
 	const bool use_default_device = dev_id.empty() || dev_id == audio_device_enumerator::DEFAULT_DEV_ID;
 	std::string selected_dev_id{};
 
+#ifndef RPCS3_UWP
 	if (use_default_device)
 	{
 		Microsoft::WRL::ComPtr<IMMDevice> default_dev{};
@@ -237,6 +252,12 @@ bool XAudio2Backend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSi
 	}
 
 	if (HRESULT hr = m_xaudio2_instance->CreateMasteringVoice(&m_master_voice, 0, 0, 0, utf8_to_wchar(use_default_device ? selected_dev_id : dev_id).c_str()); FAILED(hr))
+#else
+	// XAudio2's virtual audio client follows the system default output without
+	// IMMDeviceEnumerator, HWNDs, or desktop endpoint notification interfaces.
+	if (!use_default_device) return false;
+	if (HRESULT hr = m_xaudio2_instance->CreateMasteringVoice(&m_master_voice, 0, 0, 0, nullptr, nullptr, AudioCategory_GameEffects); FAILED(hr))
+#endif
 	{
 		XAudio.error("CreateMasteringVoice() failed: %s (0x%08x)", std::system_category().message(hr), static_cast<u32>(hr));
 		m_master_voice = nullptr;
@@ -258,7 +279,12 @@ bool XAudio2Backend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSi
 	m_sampling_rate = freq;
 	m_sample_size = sample_size;
 
+#ifdef RPCS3_UWP
+	// Keep stereo PCM even on mono endpoints; XAudio2 performs the final downmix.
+	setup_channel_layout(static_cast<u32>(ch_cnt), std::max<u32>(vd.InputChannels, 2), layout, XAudio);
+#else
 	setup_channel_layout(static_cast<u32>(ch_cnt), vd.InputChannels, layout, XAudio);
+#endif
 
 	WAVEFORMATEX waveformatex{};
 	waveformatex.wFormatTag = get_convert_to_s16() ? WAVE_FORMAT_PCM : WAVE_FORMAT_IEEE_FLOAT;
@@ -283,12 +309,14 @@ bool XAudio2Backend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSi
 		return false;
 	}
 
+#ifndef RPCS3_UWP
 	if (HRESULT hr = m_device_enumerator->RegisterEndpointNotificationCallback(this); FAILED(hr))
 	{
 		XAudio.error("RegisterEndpointNotificationCallback() failed: %s (0x%08x)", std::system_category().message(hr), static_cast<u32>(hr));
 		CloseUnlocked();
 		return false;
 	}
+#endif
 
 	if (HRESULT hr = m_source_voice->SetVolume(1.0f); FAILED(hr))
 	{
@@ -341,10 +369,22 @@ void XAudio2Backend::OnVoiceProcessingPassStart(UINT32 BytesRequired) noexcept
 	std::unique_lock lock(m_cb_mutex, std::defer_lock);
 	if (BytesRequired && !m_reset_req.observe() && lock.try_lock_for(std::chrono::microseconds{50}) && m_write_callback && m_playing)
 	{
+#ifdef RPCS3_UWP
+		// Retain the submitted buffer until XAudio2 has finished reading it.
+		XAUDIO2_VOICE_STATE state{};
+		m_source_voice->GetState(&state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+		if (state.BuffersQueued) return;
+		BytesRequired = std::min<u32>(BytesRequired, static_cast<u32>(m_data_buf.size()));
+		BytesRequired -= BytesRequired % (get_sample_size() * get_channels());
+		if (!BytesRequired) return;
+#else
 		ensure(BytesRequired <= m_data_buf.size(), "XAudio internal buffer is too small. Report to developers!");
+#endif
 
 		const u32 sample_size = get_sample_size() * get_channels();
-		u32 written = std::min(m_write_callback(BytesRequired, m_data_buf.data()), BytesRequired);
+		u32 written = 0;
+		try { written = std::min(m_write_callback(BytesRequired, m_data_buf.data()), BytesRequired); }
+		catch (...) { m_reset_req = true; return; }
 		written -= written % sample_size;
 
 		if (written >= sample_size)
@@ -360,8 +400,8 @@ void XAudio2Backend::OnVoiceProcessingPassStart(UINT32 BytesRequired) noexcept
 		XAUDIO2_BUFFER buffer{};
 		buffer.AudioBytes = BytesRequired;
 		buffer.pAudioData = static_cast<const BYTE*>(m_data_buf.data());
-		// Avoid logging in callback and assume that this always succeeds, all errors are caught by error callback anyway
-		m_source_voice->SubmitSourceBuffer(&buffer);
+		// Do not allocate/log on the real-time callback; request recovery on failure.
+		if (FAILED(m_source_voice->SubmitSourceBuffer(&buffer))) m_reset_req = true;
 	}
 }
 
@@ -373,10 +413,12 @@ void XAudio2Backend::OnCriticalError(HRESULT Error) noexcept
 
 	if (!m_reset_req.test_and_set() && m_state_callback)
 	{
-		m_state_callback(AudioStateEvent::UNSPECIFIED_ERROR);
+		try { m_state_callback(AudioStateEvent::UNSPECIFIED_ERROR); }
+		catch (...) {} // Exceptions must never cross an XAudio2 callback boundary.
 	}
 }
 
+#ifndef RPCS3_UWP
 HRESULT XAudio2Backend::OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR new_default_device_id)
 {
 	XAudio.notice("OnDefaultDeviceChanged(flow=%s, role=%s, new_default_device_id=0x%x)", flow, role, new_default_device_id);
@@ -419,3 +461,4 @@ HRESULT XAudio2Backend::OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWS
 
 	return S_OK;
 }
+#endif

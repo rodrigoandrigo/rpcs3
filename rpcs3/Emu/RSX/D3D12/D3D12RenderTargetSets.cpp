@@ -108,7 +108,7 @@ namespace
 	}
 }
 
-std::vector<u8> rsx::utility::get_rtt_indexes(surface_target target)
+std::vector<u8> rsx::utility::get_d3d12_rtt_indexes(surface_target target)
 {
 	return ::get_rtt_indexes(target);
 }

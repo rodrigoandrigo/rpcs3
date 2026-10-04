@@ -4,7 +4,7 @@
 #include "Emu/system_config.h"
 #include "GSRender.h"
 
-GSRender::GSRender(utils::serial* ar) noexcept : rsx::thread(ar)
+GSRender::GSRender(utils::serial* ar) : rsx::thread(ar)
 {
 	if (auto gs_frame = g_emu_callbacks.get_gs_frame())
 	{

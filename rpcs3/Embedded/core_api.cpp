@@ -11,6 +11,10 @@
 #include "Emu/IdManager.h"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/D3D12/D3D12Presentation.h"
+#ifdef RPCS3_UWP_MESA
+#include "Emu/RSX/GL/GLGSRender.h"
+#include "mesa_frame.h"
+#endif
 #ifdef RPCS3_UWP_D3D12
 #include "Emu/RSX/D3D12/D3D12GSRender.h"
 #endif
@@ -18,8 +22,9 @@
 #include "Emu/Io/Null/NullMouseHandler.h"
 #include "Emu/Io/Null/null_camera_handler.h"
 #include "Emu/Io/Null/null_music_handler.h"
-#include "Emu/Audio/Null/NullAudioBackend.h"
-#include "Emu/Audio/Null/null_enumerator.h"
+#include "Emu/Audio/XAudio2/XAudio2Backend.h"
+#include "Emu/Audio/audio_device_enumerator.h"
+#include "audio_source.h"
 #include "Emu/Cell/Modules/cellMsgDialog.h"
 #include "Emu/Cell/Modules/cellOskDialog.h"
 #include "Emu/Cell/Modules/cellSaveData.h"
@@ -63,9 +68,14 @@ namespace
 
 	std::string setting_restriction(std::string_view path)
 	{
-		if (path == "Video/Renderer") return "Renderer is selected by the shared D3D12 host";
-		if (path == "Audio/Renderer") return "Only the Null audio backend is integrated";
-		if (path == "Audio/Enable Buffering") return "The Null audio backend does not support buffering";
+		if (path == "Video/Renderer")
+		{
+#ifndef RPCS3_UWP_MESA
+			return "Renderer is selected by the shared D3D12 host";
+#endif
+		}
+		if (path == "Audio/Renderer") return "The UWP host uses XAudio2 on the system default output device";
+		if (path == "Audio/Audio Device") return "XAudio2 follows the system default output device in UWP";
 		if (path == "Audio/Audio Provider") return "The core selects the audio provider for the loaded executable";
 		if (path == "Core/PPU Decoder" || path == "Core/SPU Decoder")
 			return "The UWP port uses interpreters; generated-code exception recovery is unavailable";
@@ -87,9 +97,12 @@ namespace
 
 	void normalize_host_settings()
 	{
-		g_cfg.video.renderer.set(video_renderer::null);
-		g_cfg.audio.renderer.set(audio_renderer::null);
-		g_cfg.audio.enable_buffering.set(false);
+#ifdef RPCS3_UWP_MESA
+		if (g_cfg.video.renderer != video_renderer::opengl)
+#endif
+			g_cfg.video.renderer.set(video_renderer::null);
+		g_cfg.audio.renderer.set(audio_renderer::xaudio);
+		g_cfg.audio.audio_device.set(std::string(audio_device_enumerator::DEFAULT_DEV_ID));
 		g_cfg.io.keyboard.set(keyboard_handler::null);
 		g_cfg.io.mouse.set(mouse_handler::null);
 		g_cfg.io.camera.set(camera_handler::null);
@@ -166,6 +179,14 @@ namespace
 				entry.default_value = entry.value;
 				if (entry.type == RPCS3_CORE_CONFIG_ENUM) entry.enum_values = entry.value;
 			}
+#ifdef RPCS3_UWP_MESA
+			if (path == "Video/Renderer")
+			{
+				entry.value = g_cfg.video.renderer == video_renderer::opengl ? "OpenGL (Mesa Gallium D3D12)" : "Direct3D 12";
+				entry.default_value = "Direct3D 12";
+				entry.enum_values = "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)";
+			}
+#endif
 			output.push_back(std::move(entry));
 		}
 	}
@@ -334,6 +355,15 @@ namespace
 		cb.init_gs_render = [](utils::serial* ar)
 		{
 			normalize_host_settings();
+#ifdef RPCS3_UWP_MESA
+			if (g_cfg.video.renderer == video_renderer::opengl)
+			{
+				(void)d3d12::presentation().device_and_queue();
+				g_fxo->init<rsx::thread, named_thread<GLGSRender>>(ar);
+				if (auto host = runtime()) host->log(6, 0, "Embedding", "RSX: OpenGL / Mesa Gallium D3D12 renderer initialized");
+				return;
+			}
+#endif
 			ensure(g_cfg.video.renderer == video_renderer::null);
 #ifdef RPCS3_UWP_D3D12
 			try
@@ -350,20 +380,32 @@ namespace
 			g_fxo->init<rsx::thread, named_thread<NullGSRender>>(ar);
 #endif
 		};
-		cb.get_gs_frame = [] { return std::unique_ptr<GSFrameBase>{}; };
+		cb.get_gs_frame = []() -> std::unique_ptr<GSFrameBase>
+		{
+#ifdef RPCS3_UWP_MESA
+			if (g_cfg.video.renderer == video_renderer::opengl) return make_mesa_frame();
+#endif
+			return {};
+		};
 		cb.close_gs_frame = [] {};
 		cb.get_audio = []() -> std::shared_ptr<AudioBackend>
 		{
 			normalize_host_settings();
-			if (g_cfg.audio.renderer != audio_renderer::null)
-				throw std::runtime_error("UWP audio backend is not integrated");
-			return std::make_shared<NullAudioBackend>();
+			return std::make_shared<XAudio2Backend>();
 		};
 		cb.get_audio_enumerator = [](u64 renderer) -> std::shared_ptr<audio_device_enumerator>
 		{
-			if (renderer != static_cast<u64>(audio_renderer::null))
+			if (renderer != static_cast<u64>(audio_renderer::xaudio))
 				throw std::runtime_error("UWP audio enumeration is not integrated");
-			return std::make_shared<null_enumerator>();
+			class default_output final : public audio_device_enumerator
+			{
+			public:
+				std::vector<audio_device> get_output_devices() override
+				{
+					return {{std::string(DEFAULT_DEV_ID), "System default (XAudio2)", 8}};
+				}
+			};
+			return std::make_shared<default_output>();
 		};
 		cb.get_camera_handler = [] { return std::make_shared<null_camera_handler>(); };
 		cb.get_music_handler = [] { return std::make_shared<null_music_handler>(); };
@@ -386,7 +428,7 @@ namespace
 		cb.display_sleep_control_supported = [] { return false; };
 		cb.enable_display_sleep = [](bool) {};
 		cb.check_microphone_permissions = [] {};
-		cb.make_video_source = [] { return std::unique_ptr<video_source>{}; };
+		cb.make_video_source = [] { return make_uwp_audio_source(); };
 		cb.enable_gamemode = [](bool) {};
 		cb.get_database_config = [](const std::string&) { return std::string{}; };
 	}
@@ -496,6 +538,9 @@ int32_t rpcs3_core_initialize(const char* state_root) try
 			Emu.SetHasGui(true);
 			Emu.SetHeadless(false);
 			Emu.SetSupportedRenderers({video_renderer::null});
+#ifdef RPCS3_UWP_MESA
+			Emu.SetSupportedRenderers({video_renderer::null, video_renderer::opengl});
+#endif
 			Emu.SetDefaultRenderer(video_renderer::null);
 			Emu.SetUsr("00000001");
 			Emu.Init();
@@ -706,7 +751,16 @@ catch (...) { return RPCS3_CORE_INTERNAL_ERROR; }
 int32_t rpcs3_core_set_config(const char* path_utf8, const char* value_utf8) try
 {
 	if (!path_utf8 || !*path_utf8 || !value_utf8) return RPCS3_CORE_INVALID_ARGUMENT;
-	const std::string path(path_utf8), value(value_utf8);
+	const std::string path(path_utf8);
+	std::string value(value_utf8);
+#ifdef RPCS3_UWP_MESA
+	if (path == "Video/Renderer")
+	{
+		if (value == "Direct3D 12") value = "Null";
+		else if (value == "OpenGL (Mesa Gallium D3D12)") value = "OpenGL";
+		else return RPCS3_CORE_UNSUPPORTED_RENDERER;
+	}
+#endif
 	if (is_uwp_locked_setting(path)) return RPCS3_CORE_UNSUPPORTED_RENDERER;
 	return queue_command(RPCS3_CORE_COMMAND_SET_CONFIG, [path, value]
 	{

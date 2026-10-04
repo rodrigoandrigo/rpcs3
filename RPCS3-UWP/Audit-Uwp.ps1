@@ -4,6 +4,7 @@ param(
     [string[]]$StaticLibraries,
     [string]$Report,
     [string]$PackageManifest,
+    [string[]]$PackageDlls,
     [string]$VCLibsAppx = 'C:\Program Files (x86)\Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx',
     [string]$SupportedApis = 'C:\Program Files (x86)\Windows Kits\10\App Certification Kit\SupportedAPIs-x64.xml'
 )
@@ -31,6 +32,19 @@ $status = 'BLOCKED'
 $frameworkImports = [Collections.Generic.List[object]]::new()
 $frameworkPairs = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $frameworkIdentity = $null
+$packagePairs = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($privateDll in $PackageDlls) {
+    if (-not (Test-Path -LiteralPath $privateDll -PathType Leaf)) { throw "Package DLL missing: $privateDll" }
+    $privateName = [IO.Path]::GetFileName($privateDll).ToLowerInvariant()
+    $privateExports = & dumpbin.exe /nologo /exports $privateDll
+    if ($LASTEXITCODE) { throw "Package DLL exports could not be read: $privateDll" }
+    foreach ($line in $privateExports) {
+        if ($line -match '^\s+(\d+)\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)') {
+            [void]$packagePairs.Add($privateName + '|#' + $Matches[1])
+            [void]$packagePairs.Add($privateName + '|' + $Matches[2])
+        }
+    }
+}
 if ($Dll -and (Test-Path -LiteralPath $Dll) -and (Test-Path -LiteralPath $VCLibsAppx)) {
     # C++ APP CRT exports are supplied by the Microsoft UWP framework, not the
     # OS API whitelist. Inspect the actual SDK package rather than allow a DLL
@@ -92,6 +106,8 @@ if ($Dll) {
             elseif ($module -and $line -match '\bOrdinal\s+(\d+)\b') {
                 $name = '#' + $Matches[1]
                 $supported = $pairs.Contains("$module|$name")
+                $private = $packagePairs.Contains($module.ToLowerInvariant() + '|' + $name)
+                if ($private) { $supported = $true }
                 $resolved = $null
                 if (-not $supported -and $sdkModules.Contains($module)) {
                     if (-not $ordinalCache.ContainsKey($module)) {
@@ -110,18 +126,20 @@ if ($Dll) {
                     $resolved = $ordinalCache[$module][$name]
                     $supported = $resolved -and $pairs.Contains("$module|$resolved")
                 }
-                $imports.Add(@{ module = $module; symbol = $name; resolvedSymbol = $resolved; supported = [bool]$supported })
+                $imports.Add(@{ module = $module; symbol = $name; resolvedSymbol = $resolved; supported = [bool]$supported; packagePrivate = $private })
                 if (-not $supported) { $findings.Add(@{ module = $module; symbol = $name; reason = 'Ordinal import absent from SDK whitelist' }) }
             }
             elseif ($module -and $line -match '^\s+[0-9A-F]+\s+([A-Za-z_?@][\w?@$]*)\s*$') {
                 $name = $Matches[1]
                 $supported = $pairs.Contains("$module|$name")
+                $private = $packagePairs.Contains($module.ToLowerInvariant() + '|' + $name)
+                if ($private) { $supported = $true }
                 $framework = $frameworkPairs.Contains($module.ToLowerInvariant() + '|' + $name)
                 if ($framework) {
                     $frameworkImports.Add(@{ module = $module; symbol = $name })
                     $supported = $true
                 }
-                $imports.Add(@{ module = $module; symbol = $name; supported = $supported })
+                $imports.Add(@{ module = $module; symbol = $name; supported = $supported; packagePrivate = $private })
                 if (-not $supported) { $findings.Add(@{ module = $module; symbol = $name; reason = 'Import absent from SDK whitelist; package dependency/API review required' }) }
             }
         }
@@ -155,8 +173,8 @@ if ($Dll) {
     }
 }
 @{ status = $status; whitelist = $SupportedApis; dll = $Dll; imports = @($imports.ToArray()); exports = $exports;
-    packageManifest = $PackageManifest; frameworkPackage = $VCLibsAppx; frameworkImports = @($frameworkImports.ToArray());
-    findings = @($findings.ToArray()); limitation = 'Static inspection only. No installed AppContainer execution, dynamic-load audit, packaging certification or Xbox validation.' } |
+    packageManifest = $PackageManifest; packageDlls = $PackageDlls; frameworkPackage = $VCLibsAppx; frameworkImports = @($frameworkImports.ToArray());
+    findings = @($findings.ToArray()); limitation = 'Static inspection of the primary DLL only. Package-private imports are matched to actual supplied DLL exports; their transitive imports require separate inspection. No installed AppContainer execution, dynamic-load audit, packaging certification or Xbox validation.' } |
     ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Report
 Write-Output "$status - $Report ($($findings.Count) findings)"
 if ($status -eq 'BLOCKED') { exit 2 }
