@@ -120,6 +120,9 @@ namespace rsx
 			{
 				result.font_names.emplace_back("Arial.ttf");
 				result.font_names.emplace_back("arial.ttf");
+#ifdef RPCS3_UWP
+				result.font_names.emplace_back("DejaVuSans.ttf");
+#endif
 #ifdef __APPLE__
 				result.font_names.emplace_back("DejaVuSans.ttf");
 				result.font_names.emplace_back("NotoSans-Regular.ttf");

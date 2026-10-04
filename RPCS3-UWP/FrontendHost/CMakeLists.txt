@@ -110,6 +110,17 @@ if(WIN32 AND CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
 		)
 	endforeach()
 
+	# Native RSX overlays require the RPCS3 icons in addition to frontend assets.
+	set(rsx_asset_root "${CMAKE_CURRENT_SOURCE_DIR}/../../bin")
+	file(GLOB_RECURSE rsx_assets CONFIGURE_DEPENDS "${rsx_asset_root}/Icons/ui/*" "${rsx_asset_root}/fonts/*.ttf")
+	foreach(asset IN LISTS rsx_assets)
+		file(RELATIVE_PATH asset_relative "${rsx_asset_root}" "${asset}")
+		get_filename_component(asset_location "${asset_relative}" DIRECTORY)
+		file(TO_NATIVE_PATH "${asset_relative}" asset_link)
+		set_source_files_properties("${asset}" PROPERTIES VS_DEPLOYMENT_CONTENT 1
+			VS_DEPLOYMENT_LOCATION "${asset_location}"
+			VS_SETTINGS "DeploymentContent=true;DeploymentLocation=${asset_location};Link=${asset_link}")
+	endforeach()
 	add_library(RPCS3UwpRuntime SHARED
 		UWP-App/App.cpp
 		UWP-App/FrontendRuntime.h
@@ -143,6 +154,7 @@ if(WIN32 AND CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
 		"${sample_manifest}"
 		${sample_assets}
 		${sample_frontend_assets}
+		${rsx_assets}
 	)
 	# XAML-generated C++/CX requires /ZW and therefore C++17.
 	target_compile_features(RPCS3UwpApp PRIVATE cxx_std_17)

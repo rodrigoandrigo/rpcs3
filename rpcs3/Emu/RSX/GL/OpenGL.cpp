@@ -32,7 +32,15 @@ void gl::init()
 #ifdef _WIN32
 #define OPENGL_PROC(p, n) OPENGL_PROC2(p, gl##n, gl##n)
 #define WGL_PROC(p, n) OPENGL_PROC2(p, wgl##n, wgl##n)
-#define OPENGL_PROC2(p, n, tn) /*if(!gl##n)*/ if(!(n = reinterpret_cast<p>(wglGetProcAddress(#tn)))) rsx_log.error("OpenGL: initialization of " #tn " failed.")
+	const auto missing_proc = [](std::string_view name)
+	{
+		// These vendor extensions have capability-gated/core alternatives.
+		if (name == "glNamedFramebufferTextureEXT" || name == "glNamedFramebufferTextureLayerEXT" ||
+			name == "glDepthRangedNV" || name == "glDepthBoundsdNV" || name == "glInsertEventMarkerEXT")
+			rsx_log.notice("OpenGL: optional entry point %s is unavailable", name);
+		else rsx_log.error("OpenGL: initialization of %s failed.", name);
+	};
+#define OPENGL_PROC2(p, n, tn) if(!(n = reinterpret_cast<p>(wglGetProcAddress(#tn)))) missing_proc(#tn)
 #include "GLProcTable.h"
 #undef OPENGL_PROC
 #undef WGL_PROC

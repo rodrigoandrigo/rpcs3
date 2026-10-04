@@ -105,7 +105,7 @@ void GLGSRender::on_init_thread()
 	// This allows context sharing to work (both GLRCs passed to wglShareLists have to be idle or you get ERROR_BUSY)
 	m_context = m_frame->make_context();
 
-	const auto shadermode = g_cfg.video.shadermode.get();
+	auto shadermode = g_cfg.video.shadermode.get();
 	if (shadermode != shader_mode::recompiler)
 	{
 		auto context_create_func = [m_frame = m_frame]()
@@ -197,8 +197,10 @@ void GLGSRender::on_init_thread()
 		{
 		case shader_mode::async_with_interpreter:
 		case shader_mode::interpreter_only:
-			rsx_log.error("Bindless texture extension required for shader interpreter is not supported on your GPU. Will use async recompiler as a fallback.");
+			rsx_log.warning("Bindless texture extension required for shader interpreter is not supported on your GPU. Will use async recompiler as a fallback.");
 			g_cfg.video.shadermode.set(shader_mode::async_recompiler);
+			// All later initialization decisions must use the supported mode too.
+			shadermode = shader_mode::async_recompiler;
 			break;
 		default:
 			break;

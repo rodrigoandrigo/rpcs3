@@ -223,8 +223,11 @@ namespace gl
 
 	gl::texture_view* ui_overlay_renderer::load_simple_image(const rsx::overlays::image_info_base* desc, bool temp_resource, u32 owner_uid)
 	{
-		auto tex = std::make_unique<gl::texture>(GL_TEXTURE_2D, desc->w, desc->h, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
-		tex->copy_from(desc->as_span(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
+		const bool valid = desc && desc->w && desc->h && desc->get_data();
+		auto tex = std::make_unique<gl::texture>(GL_TEXTURE_2D, valid ? desc->w : 1, valid ? desc->h : 1, 1, 1, 1, GL_RGBA8, RSX_FORMAT_CLASS_COLOR);
+		// Keep resource indices intact if an optional/custom image is missing.
+		const std::array<u8, 4> transparent{};
+		tex->copy_from(valid ? desc->as_span() : std::span<const u8>(transparent), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8, {});
 
 		const GLenum remap[] = { GL_RED, GL_ALPHA, GL_BLUE, GL_GREEN };
 		auto view = std::make_unique<gl::texture_view>(tex.get(), remap);

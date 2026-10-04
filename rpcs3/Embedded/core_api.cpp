@@ -422,7 +422,7 @@ namespace
 		cb.play_sound = [](const std::string&, std::optional<f32>) {};
 		cb.get_image_info = [](const std::string&, std::string&, s32&, s32&, s32&) { return false; };
 		cb.get_scaled_image = [](const std::string&, s32, s32, s32&, s32&, u8*, bool) { return false; };
-		cb.get_font_dirs = [] { return std::vector<std::string>{}; };
+		cb.get_font_dirs = [] { return std::vector<std::string>{fs::get_executable_dir() + "/fonts/"}; };
 		cb.on_install_pkgs = [](const std::vector<std::string>&, bool) { return false; };
 		cb.add_breakpoint = [](u32) {};
 		cb.display_sleep_control_supported = [] { return false; };

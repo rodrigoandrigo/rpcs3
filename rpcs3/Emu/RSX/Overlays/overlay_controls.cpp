@@ -181,6 +181,10 @@ namespace rsx
 		{
 			const std::string res = relative_path.data();
 
+#ifdef RPCS3_UWP
+			const auto packaged_path = fs::get_executable_dir() + "/Icons/ui/" + res;
+			if (fs::is_file(packaged_path)) return std::make_unique<image_info>(packaged_path);
+#endif
 			// First check the global config dir
 			const std::string image_path = fs::get_config_dir() + "Icons/ui/" + res;
 			auto info = std::make_unique<image_info>(image_path);

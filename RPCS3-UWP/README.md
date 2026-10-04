@@ -234,6 +234,23 @@ These checks are separate from installed-package, retail Xbox, real firmware, re
 
 ## Troubleshooting
 
+### Mesa attempts to compile shaders requiring bindless textures
+
+Version 1.0.0.60 updates both the configured shader mode and the local
+initialization mode when bindless textures are unavailable. This prevents
+creating the unsupported shader interpreter after selecting the asynchronous
+recompiler. `Unexpected TOC` messages are separate PPU Debug checks; they do
+not justify changing the guest TOC register and are not shader errors.
+
+### OpenGL reports `Invalid OpenGL texture definition`
+
+Version 1.0.0.59 packages the native RSX overlay icons and DejaVu fonts and
+loads them from the application directory rather than the working directory.
+Missing optional images retain their resource slot with a transparent 1x1
+texture, instead of creating an invalid zero-sized texture. Missing vendor-only
+OpenGL entry points are reported separately from required functions; absence
+of bindless textures selects the existing asynchronous shader recompiler.
+
 ### Title audio preview fails with `Verification failed (object: 0x0)`
 
 Version 1.0.0.58 uses XAudio2 for emulated game audio on the system default
