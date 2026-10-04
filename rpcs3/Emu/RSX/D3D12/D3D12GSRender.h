@@ -193,6 +193,7 @@ protected:
 	virtual void on_init_thread() override;
 	virtual void on_exit() override;
 	virtual void do_local_task(rsx::FIFO::state state) override;
+	void on_pause_request() override;
 	bool release_GCM_label(u32 type, u32 address, u32 value) override;
 	void on_semaphore_acquire_wait() override;
 	void write_barrier(u32 address, u32 range) override;

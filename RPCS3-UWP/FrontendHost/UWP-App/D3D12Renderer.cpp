@@ -1,4 +1,5 @@
 #include "D3D12Renderer.h"
+#include "CoreVideoMapping.h"
 
 #include <imgui.h>
 #include <imgui_impl_dx12.h>
@@ -326,6 +327,16 @@ void D3D12Renderer::Resize(std::uint32_t width, std::uint32_t height)
 	CreateRenderTargets();
 }
 
+void D3D12Renderer::SetCompositionScale(float x, float y)
+{
+	if (!m_swapChainPanel || !(x > 0.0f) || !(y > 0.0f))
+		return;
+	DXGI_MATRIX_3X2_F transform{};
+	transform._11 = 1.0f / x;
+	transform._22 = 1.0f / y;
+	Check(m_swapChain->SetMatrixTransform(&transform), "Set panel composition scale");
+}
+
 void D3D12Renderer::BeginFrame(float deltaSeconds)
 {
 	WaitForFence(m_frames[m_swapChain->GetCurrentBackBufferIndex()].fenceValue);
@@ -352,7 +363,7 @@ TextureHandle D3D12Renderer::ImportCoreFrame(ID3D12Resource* resource)
 	D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
 	srv.Format = desc.Format;
 	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-	srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srv.Shader4ComponentMapping = CoreVideoComponentMapping;
 	srv.Texture2D.MipLevels = 1;
 	m_device->CreateShaderResourceView(resource, &srv, CpuDescriptor(frame.coreDescriptor));
 	return {static_cast<std::uintptr_t>(GpuDescriptor(frame.coreDescriptor).ptr),

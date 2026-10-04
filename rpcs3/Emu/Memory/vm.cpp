@@ -1209,6 +1209,20 @@ namespace vm
 		const u32 page_addr = addr + (this->flags & stack_guarded ? 0x1000 : 0);
 		const u32 page_size = size - (this->flags & stack_guarded ? 0x2000 : 0);
 
+#ifdef RPCS3_UWP
+		if (m_common)
+		{
+			// Committing through the writable alias commits the shared section
+			// pages for both aliases. Include stack guards for their marker writes.
+			utils::memory_commit(g_sudo_addr + addr, size, utils::protection::rw);
+			if (this->flags & stack_guarded)
+			{
+				utils::memory_protect(g_base_addr + addr, 4096, utils::protection::no);
+				utils::memory_protect(g_base_addr + addr + size - 4096, 4096, utils::protection::no);
+			}
+		}
+#endif
+
 		// No flags are default to readable/writable
 		// Explicit (un...) flags are used to protect from such access
 		u8 flags = 0;

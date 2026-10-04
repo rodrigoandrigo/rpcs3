@@ -223,6 +223,9 @@ void D3D12GSRender::prepare_render_targets(ID3D12GraphicsCommandList *copycmdlis
 		layout.color_addresses, layout.zeta_address,
 		layout.actual_color_pitch, layout.actual_zeta_pitch,
 		m_device.Get(), clear_color, 1.f, 0);
+	// Commit the exact layout used for the new resources before coherence,
+	// watch/readback and layout notification consume the cached member.
+	m_framebuffer_layout = layout;
 	on_framebuffer_layout_updated();
 	watch_bound_surfaces(false);
 	restore_bound_surfaces();

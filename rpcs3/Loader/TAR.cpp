@@ -98,6 +98,17 @@ std::unique_ptr<utils::serial> tar_object::get_file(const std::string& path, std
 		TARHeader header = read_header(offset);
 		offset += 512;
 
+		// A zero-filled TAR block terminates a file-backed archive. Firmware
+		// archives pad their tail with these blocks; they are not malformed headers.
+		if (m_file && offset <= max_size && std::all_of(
+			reinterpret_cast<const unsigned char*>(&header),
+			reinterpret_cast<const unsigned char*>(&header) + sizeof(header),
+			[](unsigned char value) { return value == 0; }))
+		{
+			offset = max_size;
+			return {umax, {}};
+		}
+
 		u64 size = umax;
 
 		std::string filename;

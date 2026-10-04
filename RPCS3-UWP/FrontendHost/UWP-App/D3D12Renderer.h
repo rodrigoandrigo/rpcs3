@@ -33,6 +33,7 @@ public:
 		std::uint32_t width, std::uint32_t height);
 	void Shutdown();
 	void Resize(std::uint32_t width, std::uint32_t height);
+	void SetCompositionScale(float x, float y);
 	void BeginFrame(float deltaSeconds);
 	void EndFrame();
 	void WaitForGpu();

@@ -459,6 +459,8 @@ namespace rsx
 		bool request_emu_flip(u32 buffer);
 
 		void pause();
+		// Called by the requesting CPU, not the RSX thread: wake only.
+		virtual void on_pause_request() {}
 		void unpause();
 		void wait_pause();
 

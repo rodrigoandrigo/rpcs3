@@ -26,6 +26,7 @@ class cpu_access_queue
     std::deque<std::shared_ptr<request>> requests;
     std::size_t active = 0;
     bool closed = false;
+    bool control_pending = false;
 public:
     template <typename Wake>
     bool submit(std::uint32_t address, std::uint32_t length, bool write, bool lease, Wake wake)
@@ -47,14 +48,35 @@ public:
     template <typename Synchronize>
     void pump(Synchronize synchronize)
     {
+        pump(synchronize, [] {});
+    }
+    // Control service must not draw, release leases or run with our mutex held.
+    template <typename Synchronize, typename ServiceControl>
+    void pump(Synchronize synchronize, ServiceControl service_control)
+    {
         for (;;)
         {
             std::deque<std::shared_ptr<request>> batch;
+            bool service = false;
             {
                 std::unique_lock lock(mutex);
-                changed.wait(lock, [&] {return closed || !requests.empty() || !active;});
-                if (closed || (requests.empty() && !active)) return;
-                batch.swap(requests);
+                changed.wait(lock, [&] {return closed || control_pending || !requests.empty() || !active;});
+                if (closed) return;
+                if (control_pending)
+                {
+                    control_pending = false;
+                    service = true;
+                }
+                else
+                {
+                    if (requests.empty() && !active) return;
+                    batch.swap(requests);
+                }
+            }
+            if (service)
+            {
+                service_control();
+                continue; // Still cannot draw while any CPU lease is active.
             }
             for (const auto& job : batch)
             {
@@ -71,6 +93,11 @@ public:
                 catch (...) {job->completed.set_exception(std::current_exception());}
             }
         }
+    }
+    void notify_control()
+    {
+        {std::lock_guard lock(mutex); control_pending = true;}
+        changed.notify_all();
     }
     void release() noexcept
     {

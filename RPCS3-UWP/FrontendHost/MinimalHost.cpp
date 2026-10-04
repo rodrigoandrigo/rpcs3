@@ -1,6 +1,7 @@
 #include "MinimalHost.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <Windows.h>
 
 #include <winrt/Windows.ApplicationModel.h>
@@ -1030,9 +1031,22 @@ void MinimalHost::DrawToolsPage()
 	ImGui::TextDisabled("UWP-native administration backed by the embedded RPCS3 core");
 	ImGui::Separator();
 
+#ifdef RPCS3_HOST_WITH_CORE
+	const auto coreState = rpcs3_core_state();
+	ImGui::BeginDisabled(!m_coreReady || coreState != 3); // system_state::running
+#endif
 	if (ShellButton("Pause")) Execute(HostCommand::PauseContent);
+#ifdef RPCS3_HOST_WITH_CORE
+	ImGui::EndDisabled();
+#endif
 	ImGui::SameLine();
+#ifdef RPCS3_HOST_WITH_CORE
+	ImGui::BeginDisabled(!m_coreReady || coreState != 4); // system_state::paused
+#endif
 	if (ShellButton("Resume")) Execute(HostCommand::ResumeContent);
+#ifdef RPCS3_HOST_WITH_CORE
+	ImGui::EndDisabled();
+#endif
 	ImGui::SameLine();
 	if (ShellButton("Stop")) Execute(HostCommand::StopContent);
 	ImGui::SameLine();
@@ -1848,10 +1862,30 @@ void MinimalFrontend::DrawFrame(const FrameInput& input,
 		.rightShoulder = m_previousInput.rightShoulder,
 	}, m_host.OwnsOverlayInput());
 	const bool overlayOwnedAtFrameStart = m_host.OwnsOverlayInput();
+	// Desktop widgets, including the File--Help menu bar, own gamepad focus.
+	// Do not let the retained console-shell navigation activate a game or open
+	// settings while the same A/B/Menu press is being handled by ImGui.
+	FrameInput shellInput = input;
+	const bool menuOwnsInput = input.menu ||
+		ImGui::GetCurrentContext()->NavLayer == ImGuiNavLayer_Menu ||
+		ImGui::GetCurrentContext()->NavWindowingTarget != nullptr ||
+		ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
+	if (!overlayOwnedAtFrameStart && (ImGui::GetIO().NavActive || input.menu ||
+		ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)))
+	{
+		shellInput = {};
+		shellInput.deltaSeconds = input.deltaSeconds;
+		if (!menuOwnsInput)
+		{
+			shellInput.context = input.context;
+			shellInput.view = input.view;
+			shellInput.alternate = input.alternate;
+		}
+	}
 	if (!m_host.HandleOverlayInput(input, m_previousInput) &&
 		!m_shellInputReleaseBarrier)
 	{
-		m_frontend->HandleInput(input);
+		m_frontend->HandleInput(shellInput);
 	}
 	m_renderer->Draw(*m_frontend, presentation, input.deltaSeconds);
 	m_host.DrawOverlayPages();

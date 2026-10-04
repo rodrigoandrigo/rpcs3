@@ -480,6 +480,7 @@ error_code sys_rsx_context_iomap(cpu_thread& cpu, u32 context_id, u64 io, u64 ea
 {
 	cpu.state += cpu_flag::wait;
 
+
 	sys_rsx.warning("sys_rsx_context_iomap(context_id=0x%x, io=0x%x, ea=0x%x, size=0x%x, flags=0x%llx)", context_id, io, ea, size, flags);
 
 	const auto render = rsx::get_current_renderer();
@@ -493,7 +494,6 @@ error_code sys_rsx_context_iomap(cpu_thread& cpu, u32 context_id, u64 io, u64 ea
 	{
 		return CELL_EINVAL;
 	}
-
 	if (!render->is_fifo_idle())
 	{
 		sys_rsx.warning("sys_rsx_context_iomap(): RSX is not idle while mapping io");
@@ -501,7 +501,6 @@ error_code sys_rsx_context_iomap(cpu_thread& cpu, u32 context_id, u64 io, u64 ea
 
 	// Wait until we have no active RSX locks and reserve iomap for use. Must do so before acquiring vm lock to avoid deadlocks
 	rsx::reservation_lock<true> rsx_lock(::narrow<u32>(ea), static_cast<u32>(size));
-
 	vm::writer_lock rlock;
 
 	for (u64 addr = ea, end = ea + size; addr < end; addr += 0x100000)
@@ -519,7 +518,6 @@ error_code sys_rsx_context_iomap(cpu_thread& cpu, u32 context_id, u64 io, u64 ea
 	}
 
 	io >>= 20, ea >>= 20, size >>= 20;
-
 	rsx::eng_lock fifo_lock(render);
 	std::scoped_lock lock(render->sys_rsx_mtx);
 

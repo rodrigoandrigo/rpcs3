@@ -397,6 +397,7 @@ struct cpu_prof
 					// Get short function hash
 					const u64 name = ppu ? atomic_storage<u32>::load(ppu->cia) : atomic_storage<u64>::load(ptr->block_hash);
 
+
 					// Append occurrence
 					info.samples++;
 
@@ -666,7 +667,8 @@ void cpu_thread::operator()()
 	{
 	case thread_class::ppu:
 	{
-		if (g_cfg.core.ppu_prof)
+		if (g_cfg.core.ppu_prof
+		)
 		{
 			g_fxo->get<cpu_profiler>().registered.push(id);
 		}
@@ -1572,7 +1574,8 @@ void cpu_thread::flush_profilers() noexcept
 		return;
 	}
 
-	if (g_cfg.core.spu_prof || g_cfg.core.spu_debug || g_cfg.core.ppu_prof)
+	if (g_cfg.core.spu_prof || g_cfg.core.spu_debug || g_cfg.core.ppu_prof
+	)
 	{
 		g_fxo->get<cpu_profiler>().registered.push(0);
 	}

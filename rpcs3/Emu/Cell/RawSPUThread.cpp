@@ -370,6 +370,9 @@ bool spu_thread::write_reg(const u32 addr, const u32 value)
 				cpu->state += cpu_flag::again;
 			}
 		}
+		else
+		{
+		}
 
 		return true;
 	}

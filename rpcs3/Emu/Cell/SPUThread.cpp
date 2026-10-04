@@ -5512,6 +5512,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 				}
 
 				check_state();
+				if (get_type() >= spu_type::raw)
 				return out;
 			}
 
@@ -6301,6 +6302,7 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 		{
 			return false;
 		}
+		if (get_type() >= spu_type::raw)
 
 		check_state();
 		return true;

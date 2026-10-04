@@ -12,6 +12,7 @@
 
 extern pD3DCompile wrapD3DCompile;
 
+
 void Shader::Compile(const std::string &code, SHADER_TYPE st)
 {
 	content = code;

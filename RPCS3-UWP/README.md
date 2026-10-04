@@ -198,6 +198,14 @@ These checks are separate from installed-package, retail Xbox, real firmware, re
 
 Version 1.0.0.32 distinguishes an already running game from a pending launch. It shows a video status window with Stop when the core is active but has not published a frame. The core no longer silently selects Null when the D3D12 host device is missing, and logs successful shared D3D12 renderer initialization. No-frame status does not prove guest execution is progressing.
 
+### UWP synchronization and surface fixes
+
+The UWP path services external RSX pause requests during startup and while CPU
+access leases are active, without discarding leases or bypassing guest locks.
+The validated framebuffer layout is committed before guest-memory watches are
+registered. Shutdown waits for full stop, including after a previous fault,
+with a 30-second deadline and the fault remaining latched.
+
 ### Boot fails with Windows error `0x5AF` (commit/pagefile limit)
 
 Version 1.0.0.31 removes the unused 32 GiB hook reservation and copy-on-write mapping from the UWP interpreter path. The retained guest RAM mappings are separate and remain necessary. C++ command failures are reported through the embedding error callback and command completion result instead of being rethrown from the command wrapper. The core is marked faulted, so the host must stop it before retrying.
@@ -243,5 +251,85 @@ Confirm that the selected item was stored in the Future Access List and mounted 
 OpenCV is optional for this UWP build. The warning is expected when the desktop OpenCV dependency is unavailable.
 
 ## License
+
+Version 1.0.0.55 replaces UWP preallocated sparse-file guest blocks with
+pagefile-backed SEC_RESERVE shared sections. Guest allocations commit only
+their used ranges through the writable alias, including stack guard markers.
+Both aliases remain shared and normal guest-page protections still apply.
+Committed section pages remain committed until the block is destroyed; this
+does not remove the Xbox memory budget or prove game execution on Xbox.
+The file-backed TAR reader also recognizes zero-filled end-of-archive blocks
+instead of reporting valid firmware archive padding as malformed headers.
+
+Version 1.0.0.54 prevents Xbox pointer clicks from also activating the previously
+gamepad-focused widget. Tools disables Pause unless the core is running and
+Resume unless it is paused. Shared widgets respect disabled state and wait for
+the opening confirmation to be released before activating an overlay action.
+Command 3 is Pause, not PUP/PKG installation (13/12).
+Installed Xbox firmware/package workflows require separate runtime validation.
+
+Version 1.0.0.53 enables gamepad access to the File--Help menu bar. Tap Menu
+to toggle menu-bar focus, use the D-pad to navigate, A to open/confirm, and B
+to cancel. Desktop ImGui navigation consumes its commands without also firing
+retained shell actions such as launching a game or opening settings. Overlay
+pages retain their own input handling. Xbox runtime validation remains separate.
+
+Version 1.0.0.52 maps the right stick to ImGui manual scrolling with a 0.35
+deadzone, instead of the left stick. Right-stick movement does not activate
+buttons; A remains the confirmation button. The artificial R3 "Pointer Press"
+alias is removed, while the actual RightThumb input remains available for game
+controller mapping. Xbox controller runtime validation remains separate.
+
+Version 1.0.0.51 uses the full CoreWindow area instead of the Xbox safe-area
+inset. Font sizes use the same pixel units as the controls, avoiding oversized
+labels in fixed-size buttons. The composition swap chain follows the panel's
+actual dimensions and per-axis composition scale, including subsequent changes.
+Build and package validation do not replace Xbox display validation.
+
+Version 1.0.0.50 disables the Xbox automatic UWP layout scaling before creating
+the XAML interface. Desktop DPI handling and window resizing are unchanged.
+Xbox runtime validation remains a separate step.
+
+Version 1.0.0.49 hides the library interface while a game is running and stretches
+the video to fill the app client area, without a floating video window or borders.
+Before the first frame, the game area is black. Press Escape or hold Menu+View
+on a gamepad to stop and return to the library. This does not change the OS
+window mode or remove the system title bar.
+
+Version 1.0.0.48 removes the temporary investigation instrumentation, shader
+failure dumps and pixel readbacks. Normal RPCS3 logging and all functional
+corrections remain. The application no longer creates the temporary frontend
+video trace. Previously created user logs are not deleted.
+
+Version 1.0.0.47 presents the core video plane as opaque. The frontend's core
+frame SRV preserves RGB and maps alpha to one, so valid RGB frames with zero
+display-buffer alpha do not disappear under ImGui blending. Internal RSX pixels,
+rendering/blending, and ordinary UI texture mappings are unchanged. The native
+`d3d12_video_alpha_test.cpp` checks the SDK component selectors and zero/partial/
+full-alpha inputs; installed GPU presentation remains a separate validation step.
+
+Version 1.0.0.46 retains each vertex shader's constant relocation table and uses
+it when uploading the D3D12 constant buffer. Indexed-constant shaders continue
+to upload the full RSX bank; the branch-bit slot remains unchanged. Installed
+game rendering remains a separate validation step.
+
+
+Version 1.0.0.42 defines the shared RSX `_saturate` helper in D3D12 HLSL using
+`clamp(x, 0, 1)`, matching the shared GLSL expression. The native shader regression
+accepts a captured fragment shader with the optional `ps_5_0` argument, reproduces
+the missing-helper X3004, and compiles the corrected full shader. Installed-game
+rendering and edge-case floating-point conformance remain unverified.
+
+Version 1.0.0.41 adapts scalar literal vector constructors emitted by the shared
+decompilers to explicit HLSL components in the D3D12 vertex and fragment paths.
+It also defines vertex `_fetch_constant` against the existing per-draw `vc`
+constant buffer and maps the shared float `fma` operation to HLSL `mad` (the
+Shader Model 5 `fma` intrinsic only accepts doubles). This uses SM5 float math;
+exact RSX rounding equivalence is not established. Other renderers and
+expression/vector constructors are unchanged.
+The native `d3d12_shader_splat_test.cpp` reproduces X3014 in the captured shader
+and compiles the corrected full shader with D3DCompile. This is shader compiler
+validation, not an installed-game rendering test.
+
 
 RPCS3-UWP contains code derived from RPCS3 and uses third-party components with their respective licenses. See the repository license files and `Frontend/THIRD_PARTY_NOTICES.md` before redistribution.

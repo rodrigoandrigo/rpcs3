@@ -4,6 +4,7 @@
 #include "D3D12VertexProgramDecompiler.h"
 #include "D3D12CommonDecompiler.h"
 #include "D3D12ShaderConstants.h"
+#include "D3D12ShaderSplat.h"
 #include "D3D12VertexFetch.h"
 #include "D3D12VertexTextures.h"
 #include "Emu/System.h"
@@ -54,6 +55,7 @@ void D3D12VertexProgramDecompiler::insertConstants(std::stringstream & OS, const
 	OS << "	float4 vc[468];\n";
 	OS << "	uint transform_branch_bits;\n";
 	OS << "};\n";
+	OS << d3d12::vertex_constant_fetch;
 	for (const auto& type : constants)
 	{
 		if (!type.type.starts_with("sampler")) continue;

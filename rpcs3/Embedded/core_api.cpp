@@ -415,7 +415,9 @@ static void stop_and_wait()
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 	while (!Emu.IsStopped(true))
 	{
-		if (s_faulted || std::chrono::steady_clock::now() >= deadline)
+		// A previous guest/renderer fault must not abort the asynchronous join.
+		// Keep the fault latched, but wait for full stop before allowing unload.
+		if (std::chrono::steady_clock::now() >= deadline)
 		{
 			s_faulted = true;
 			throw std::runtime_error("Core stop did not complete; do not unload the DLL");

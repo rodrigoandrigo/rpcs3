@@ -569,6 +569,16 @@ namespace utils
 	shm::shm(u64 size, const std::string& storage)
 		: m_size(utils::align(size, 0x10000))
 	{
+#ifdef RPCS3_UWP
+		// Preallocated guest blocks must not charge their entire sparse-file
+		// views against the Xbox AppContainer memory budget at startup.
+		m_reserved = true;
+		m_handle = ::CreateFileMappingFromApp(INVALID_HANDLE_VALUE, nullptr,
+			PAGE_READWRITE | SEC_RESERVE, m_size, nullptr);
+		if (!m_handle)
+			fmt::throw_exception("Failed to reserve shared guest memory (size=0x%x, Win32 error %u)", m_size, GetLastError());
+		return;
+#endif
 #ifdef _WIN32
 		fs::file f;
 
@@ -1001,7 +1011,7 @@ namespace utils
 
 			if (MapViewOfFile3(m_handle, GetCurrentProcess(), target, 0, m_size, MEM_REPLACE_PLACEHOLDER, access, nullptr, 0))
 			{
-				if (prot != protection::rw && prot != protection::wx)
+				if (!m_reserved && prot != protection::rw && prot != protection::wx)
 				{
 					DWORD old;
 					if (!::VirtualProtect(target, m_size, +prot, &old))
@@ -1014,7 +1024,7 @@ namespace utils
 				return {target, {}};
 			}
 
-			return {nullptr, "Failed to map3"};
+			return {nullptr, fmt::format("Failed to map3 (Win32 error %u)", GetLastError())};
 		}
 
 		if (!::VirtualFree(mem.AllocationBase, 0, MEM_RELEASE))

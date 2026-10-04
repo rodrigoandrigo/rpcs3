@@ -15,6 +15,8 @@ public:
 
 private:
 	void OnLoaded(Platform::Object^ sender, Windows::UI::Xaml::RoutedEventArgs^ args);
+	void UpdatePanelSize();
+	using ResizeRuntime = void (*)(void*, uint32_t, uint32_t, float, float);
 	using CreateRuntime = void* (*)(::IUnknown*, uint32_t, uint32_t, float);
 	using RunRuntime = void (*)(void*);
 	using StopRuntime = void (*)(void*);
@@ -23,6 +25,7 @@ private:
 	RunRuntime m_run = nullptr;
 	StopRuntime m_stop = nullptr;
 	DestroyRuntime m_destroy = nullptr;
+	ResizeRuntime m_resize = nullptr;
 	void* m_runtime = nullptr;
 	Windows::Foundation::IAsyncAction^ m_worker;
 };

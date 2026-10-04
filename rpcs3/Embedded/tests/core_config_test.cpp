@@ -90,6 +90,13 @@ int main(int argc, char** argv)
         const auto result = rpcs3_core_set_config(path, value.c_str());
         return result == 0 ? wait() : result;
     };
+    check(set("Core/PPU Debug", "true") == 0 && set("Core/SPU Debug", "true") == 0,
+        "enable guest startup diagnostics");
+    snapshot();
+    check(entries.at("Core/PPU Debug").value == "true" && entries.at("Core/SPU Debug").value == "true",
+        "diagnostic options visible in snapshot");
+    check(set("Core/PPU Debug", "false") == 0 && set("Core/SPU Debug", "false") == 0,
+        "disable guest startup diagnostics");
     check(set("Input/Output/Camera flip", entries.at("Input/Output/Camera flip").value) == 0,
         "resolve slash-containing group");
     check(set("VFS/Enable /host_root/", "false") == 0, "resolve slash-containing leaf");

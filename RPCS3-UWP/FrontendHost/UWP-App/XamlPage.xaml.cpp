@@ -11,6 +11,11 @@ XamlPage::XamlPage()
 {
 	InitializeComponent();
 	Loaded += ref new Windows::UI::Xaml::RoutedEventHandler(this, &XamlPage::OnLoaded);
+	FrontendPanel->SizeChanged += ref new Windows::UI::Xaml::SizeChangedEventHandler(
+		[this](Platform::Object^, Windows::UI::Xaml::SizeChangedEventArgs^) { UpdatePanelSize(); });
+	FrontendPanel->CompositionScaleChanged += ref new Windows::Foundation::TypedEventHandler<
+		Windows::UI::Xaml::Controls::SwapChainPanel^, Platform::Object^>(
+		[this](Windows::UI::Xaml::Controls::SwapChainPanel^, Platform::Object^) { UpdatePanelSize(); });
 }
 
 void XamlPage::OnLoaded(Platform::Object^, Windows::UI::Xaml::RoutedEventArgs^)
@@ -30,27 +35,26 @@ void XamlPage::OnLoaded(Platform::Object^, Windows::UI::Xaml::RoutedEventArgs^)
 		m_run = reinterpret_cast<RunRuntime>(GetProcAddress(m_runtimeModule, "rpcs3_frontend_run"));
 		m_stop = reinterpret_cast<StopRuntime>(GetProcAddress(m_runtimeModule, "rpcs3_frontend_stop"));
 		m_destroy = reinterpret_cast<DestroyRuntime>(GetProcAddress(m_runtimeModule, "rpcs3_frontend_destroy"));
-		if (!create || !m_run || !m_stop || !m_destroy)
+		m_resize = reinterpret_cast<ResizeRuntime>(GetProcAddress(m_runtimeModule, "rpcs3_frontend_resize"));
+		if (!create || !m_run || !m_stop || !m_destroy || !m_resize)
 		{
 			StatusText->Text = "RPCS3 runtime API is incomplete.";
 			return;
 		}
 		StatusText->Text = "Creating D3D12 frontend...";
 		auto inspectable = reinterpret_cast<IInspectable*>(FrontendPanel);
-		auto display = Windows::Graphics::Display::DisplayInformation::GetForCurrentView();
-		float scale = static_cast<float>(display->RawPixelsPerViewPixel);
-		if (!(scale > 0.0f))
-			scale = static_cast<float>(display->LogicalDpi / 96.0f);
+		const float scale = FrontendPanel->CompositionScaleX;
 		const auto width = static_cast<uint32_t>(std::max(1.0,
 			std::round(FrontendPanel->ActualWidth * scale)));
 		const auto height = static_cast<uint32_t>(std::max(1.0,
-			std::round(FrontendPanel->ActualHeight * scale)));
+			std::round(FrontendPanel->ActualHeight * FrontendPanel->CompositionScaleY)));
 		m_runtime = create(inspectable, width, height, scale);
 		if (!m_runtime)
 		{
 			StatusText->Text = "RPCS3 frontend initialization failed.";
 			return;
 		}
+		UpdatePanelSize();
 		StatusText->Text = "Starting RPCS3 frontend...";
 		m_worker = ThreadPool::RunAsync(ref new WorkItemHandler(
 			[this](Windows::Foundation::IAsyncAction^)
@@ -67,6 +71,16 @@ void XamlPage::OnLoaded(Platform::Object^, Windows::UI::Xaml::RoutedEventArgs^)
 	{
 		StatusText->Text = "RPCS3 native startup failed. The frontend remains available.";
 	}
+}
+
+void XamlPage::UpdatePanelSize()
+{
+	if (!m_runtime || !m_resize || FrontendPanel->ActualWidth <= 0 || FrontendPanel->ActualHeight <= 0)
+		return;
+	m_resize(m_runtime,
+		static_cast<uint32_t>(std::max(1.0, std::round(FrontendPanel->ActualWidth * FrontendPanel->CompositionScaleX))),
+		static_cast<uint32_t>(std::max(1.0, std::round(FrontendPanel->ActualHeight * FrontendPanel->CompositionScaleY))),
+		FrontendPanel->CompositionScaleX, FrontendPanel->CompositionScaleY);
 }
 
 XamlPage::~XamlPage()

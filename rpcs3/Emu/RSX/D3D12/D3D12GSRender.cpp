@@ -41,6 +41,7 @@ ID3D12Device* g_d3d12_device = nullptr;
 
 namespace
 {
+
 HMODULE D3D12Module;
 HMODULE D3D11Module;
 HMODULE D3DCompiler;
@@ -808,11 +809,22 @@ bool D3D12GSRender::request_surface_memory(u32 address, u32 length, bool write, 
 	});
 }
 
+void D3D12GSRender::on_pause_request()
+{
+	m_cpu_access_queue.notify_control();
+}
+
 void D3D12GSRender::process_surface_requests()
 {
 	m_cpu_access_queue.pump([&](u32 address, u32 length, bool write)
 	{
 		synchronize_surface_memory(address, length, write);
+	}, [&]
+	{
+		if (external_interrupt_lock)
+		{
+			wait_pause();
+		}
 	});
 }
 
@@ -825,7 +837,9 @@ void D3D12GSRender::watch_bound_surfaces(bool dirty)
 		const auto desc = image->GetDesc();
 		const u64 rows = u64(desc.Height) * (desc.SampleDesc.Count > 1 ? desc.SampleDesc.Count / 2 : 1);
 		const u64 size = u64(pitch) * rows;
-		ensure(size && size <= UINT32_MAX && vm::check_addr(address, vm::page_writable, static_cast<u32>(size)));
+		const bool valid_size = size && size <= UINT32_MAX;
+		const bool writable = valid_size && vm::check_addr(address, vm::page_writable, static_cast<u32>(size));
+		ensure(writable);
 		const u64 key = (1ull << 63) | reinterpret_cast<u64>(image);
 		if (get_tiled_memory_region(utils::address_range32::start_length(address, static_cast<u32>(size))))
 			fmt::throw_exception("D3D12 guest surface tiling/coherence is not implemented");

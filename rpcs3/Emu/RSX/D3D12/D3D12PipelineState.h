@@ -4,6 +4,7 @@
 #include "../Program/ProgramStateCache.h"
 #include "D3D12VertexProgramDecompiler.h"
 #include "D3D12FragmentProgramDecompiler.h"
+#include "D3D12ShaderSplat.h"
 #include "Utilities/File.h"
 #include "Emu/system_config.h"
 
@@ -85,6 +86,8 @@ public:
 	std::string content;
 	size_t vertex_shader_input_count = 0;
 	std::vector<u32> constant_offsets;
+	std::vector<u16> vertex_constant_ids;
+	bool vertex_constants_indexed = false;
 	size_t m_textureCount = 0;
 
 	/**
@@ -125,7 +128,7 @@ struct D3D12Traits
 	{
 		u32 size;
 		D3D12FragmentDecompiler FS(RSXFP, size);
-		const std::string &shader = FS.Decompile();
+		const std::string shader = d3d12::expand_literal_splats(FS.Decompile());
 		fragmentProgramData.Compile(shader, Shader::SHADER_TYPE::SHADER_TYPE_FRAGMENT);
 		fragmentProgramData.m_textureCount = 0;
 		for (const ParamType& PT : FS.m_parr.params[PF_PARAM_UNIFORM])
@@ -151,8 +154,10 @@ struct D3D12Traits
 	void recompile_vertex_program(const RSXVertexProgram &RSXVP, vertex_program_type& vertexProgramData, size_t ID)
 	{
 		D3D12VertexProgramDecompiler VS(RSXVP);
-		std::string shaderCode = VS.Decompile();
+		std::string shaderCode = d3d12::expand_literal_splats(VS.Decompile());
 		vertexProgramData.Compile(shaderCode, Shader::SHADER_TYPE::SHADER_TYPE_VERTEX);
+		vertexProgramData.vertex_constant_ids.assign(VS.m_constant_ids.begin(), VS.m_constant_ids.end());
+		vertexProgramData.vertex_constants_indexed = VS.properties.has_indexed_constants;
 		vertexProgramData.vertex_shader_input_count = 1; // Unified raw RSX stream.
 		if (g_cfg.video.log_programs)
 			fs::file(fs::get_cache_dir() + "shaderlog/VertexProgram" + std::to_string(ID) + ".hlsl", fs::rewrite).write(shaderCode);

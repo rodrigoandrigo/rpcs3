@@ -23,6 +23,7 @@ struct WidgetRuntime
 	bool popupOpenAtFrameStart = false;
 	bool backConsumedThisFrame = false;
 	bool initialFocusPending = false;
+	bool activationReleasePending = false;
 };
 
 WidgetRuntime s_runtime;
@@ -48,7 +49,7 @@ bool NavigableInvisibleButton(const char* id, ImVec2 size)
 #if IMGUI_VERSION_NUM >= 19140
 	ImGui::PopStyleColor();
 #endif
-	return activated;
+	return activated && !s_runtime.activationReleasePending;
 }
 
 ImU32 Color(const ImVec4& color)
@@ -75,6 +76,11 @@ ImVec2 ResolveControlSize(ImVec2 size, float defaultHeight = 46.0f)
 bool RetainedActivatePressed(bool focused)
 {
 	if (!focused)
+		return false;
+	if (s_runtime.activationReleasePending ||
+		(GImGui->LastItemData.InFlags & ImGuiItemFlags_Disabled) != 0)
+		return false;
+	if (ImGui::GetIO().MouseDown[0] || ImGui::GetIO().MouseClicked[0])
 		return false;
 	if (s_runtime.inputActive && s_runtime.input.accept &&
 		!s_runtime.previousInput.accept)
@@ -145,8 +151,9 @@ void SubmitImGuiNavigationInput(const FrameInput& input,
 
 	io.AddKeyEvent(ImGuiKey_GamepadFaceDown, input.accept);
 	io.AddKeyEvent(ImGuiKey_GamepadFaceRight, input.back);
-	// X is host-owned; ImGui reserves FaceLeft for window switching.
-	io.AddKeyEvent(ImGuiKey_GamepadFaceLeft, false);
+	// ImGui uses FaceLeft as its menu-layer toggle. Bind the host Menu action
+	// instead of X, which remains reserved for the game context menu.
+	io.AddKeyEvent(ImGuiKey_GamepadFaceLeft, input.menu);
 	io.AddKeyEvent(ImGuiKey_GamepadFaceUp, input.alternate);
 	io.AddKeyEvent(ImGuiKey_GamepadStart, input.menu);
 	io.AddKeyEvent(ImGuiKey_GamepadBack, input.view);
@@ -161,10 +168,12 @@ void SubmitImGuiNavigationInput(const FrameInput& input,
 		return analog <= deadzone ? 0.0f :
 			(analog - deadzone) / (1.0f - deadzone);
 	};
-	const float stickLeft = magnitude(false, -input.leftStickX);
-	const float stickRight = magnitude(false, input.leftStickX);
-	const float stickUp = magnitude(false, input.leftStickY);
-	const float stickDown = magnitude(false, -input.leftStickY);
+	// ImGui's LStick keys are its manual-scroll channel, not physical bindings.
+	// Feed the right stick here; left-stick selection remains host-owned.
+	const float stickLeft = magnitude(false, -input.rightStickX);
+	const float stickRight = magnitude(false, input.rightStickX);
+	const float stickUp = magnitude(false, input.rightStickY);
+	const float stickDown = magnitude(false, -input.rightStickY);
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadDpadLeft, input.left,
 		input.left ? 1.0f : 0.0f);
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadDpadRight, input.right,
@@ -178,14 +187,11 @@ void SubmitImGuiNavigationInput(const FrameInput& input,
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, stickUp > 0.0f, stickUp);
 	io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, stickDown > 0.0f, stickDown);
 
-	const float rightLeft = magnitude(false, -input.rightStickX);
-	const float rightRight = magnitude(false, input.rightStickX);
-	const float rightUp = magnitude(false, input.rightStickY);
-	const float rightDown = magnitude(false, -input.rightStickY);
-	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickLeft, rightLeft > 0.0f, rightLeft);
-	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickRight, rightRight > 0.0f, rightRight);
-	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickUp, rightUp > 0.0f, rightUp);
-	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickDown, rightDown > 0.0f, rightDown);
+	// Do not also expose scroll input as a second set of widget actions.
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickLeft, false, 0.0f);
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickRight, false, 0.0f);
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickUp, false, 0.0f);
+	io.AddKeyAnalogEvent(ImGuiKey_GamepadRStickDown, false, 0.0f);
 }
 
 void BeginWidgetFrame(const ShellTheme& theme, const WidgetInputState& input,
@@ -198,6 +204,13 @@ void BeginWidgetFrame(const ShellTheme& theme, const WidgetInputState& input,
 	s_runtime.previousInput = previousInput;
 	s_runtime.inputActive = true;
 	s_runtime.imguiOwnsNavigation = imguiOwnsNavigation;
+	if (navigationOwnershipEntered)
+		s_runtime.activationReleasePending = true;
+	if (s_runtime.activationReleasePending && !input.accept &&
+		!ImGui::IsKeyDown(ImGuiKey_GamepadFaceDown) &&
+		!ImGui::IsKeyDown(ImGuiKey_Enter) && !ImGui::IsKeyDown(ImGuiKey_Space) &&
+		!ImGui::GetIO().MouseDown[0])
+		s_runtime.activationReleasePending = false;
 	s_runtime.popupOpenAtFrameStart = s_runtime.popupOpenLastFrame;
 	s_runtime.backConsumedThisFrame = false;
 	if (ImGui::GetCurrentContext())

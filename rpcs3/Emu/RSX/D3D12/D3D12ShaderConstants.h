@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
+#include "D3D12ShaderSplat.h"
 
 namespace d3d12
 {
@@ -62,6 +63,8 @@ namespace d3d12
 
     inline void insert_shader_constants(std::ostream& output)
     {
+        output << float_multiply_add;
+        output << rsx_saturate;
         output << R"(#define floatBitsToUint asuint
 #define uintBitsToFloat asfloat
 cbuffer SCALE_OFFSET : register(b0)

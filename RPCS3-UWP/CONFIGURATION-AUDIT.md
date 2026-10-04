@@ -30,6 +30,15 @@ These restrictions are enforced by the API as well as the frontend. Reset reappl
 
 The native regression harness in `rpcs3/Embedded/tests/core_config_test.cpp` loads the actual DLL with the installed x64 UWP VC runtime and uses a new isolated state directory. It exercises enumeration, slash-containing paths, numeric validation, library collections, log maps, invalid input, long text, host restrictions, reset, persistence, failure rollback, shutdown, and release. It does not access the installed application's settings or firmware.
 
+Temporary investigation instrumentation was removed in version 1.0.0.48.
+Normal RPCS3 debug configuration options and regression checks remain.
+
+Version 1.0.0.37 passed the 29 API checks and the native D3D12 CPU-access
+queue test over 100 iterations. The latter verifies pause service with an
+active lease, exclusion of drawing until release, notification preservation,
+nested grants and error propagation. It does not execute a guest game or
+prove the complete RSX pause path inside AppContainer.
+
 The Qt comparison covers the emulator-setting registry. Qt-specific QSettings preferences, auxiliary managers, debugger windows, device discovery, game-specific configuration workflows, and guest execution are separate capabilities. This audit does not claim full functional parity with every Qt window. The Users/Saves/Trophies/Patches/Cheats tools currently open data directories rather than reproduce the Qt managers.
 
 Build the delivery artifact through `RPCS3-UWP.slnx`; the solution builds the DLL and frontend and signs and verifies the complete MSIXBundle.

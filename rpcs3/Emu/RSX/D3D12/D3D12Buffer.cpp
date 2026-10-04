@@ -6,6 +6,7 @@
 
 #include "D3D12GSRender.h"
 #include "D3D12ShaderConstants.h"
+#include "D3D12VertexConstants.h"
 #include "d3dx12.h"
 #include "../Common/BufferUtils.h"
 #include "D3D12Formats.h"
@@ -87,7 +88,10 @@ void D3D12GSRender::upload_and_bind_vertex_shader_constants(size_t descriptor_in
 
 	void *mapped_buffer = m_buffer_data.map<void>(CD3DX12_RANGE(heap_offset, heap_offset + buffer_size));
 	std::memset(mapped_buffer, 0, buffer_size);
-	GRAPH_frontend().fill_vertex_program_constants_data(mapped_buffer, {});
+	ensure(m_current_vertex_shader);
+	const auto constant_ids = d3d12::vertex_constant_upload_ids(
+		m_current_vertex_shader->vertex_constants_indexed, m_current_vertex_shader->vertex_constant_ids);
+	GRAPH_frontend().fill_vertex_program_constants_data(mapped_buffer, constant_ids);
 	*(reinterpret_cast<u32*>((char *)mapped_buffer + (468 * 4 * sizeof(float)))) = rsx::method_registers.transform_branch_bits();
 	m_buffer_data.unmap(CD3DX12_RANGE(heap_offset, heap_offset + buffer_size));
 

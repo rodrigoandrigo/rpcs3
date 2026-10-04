@@ -1077,9 +1077,7 @@ namespace rsx
 			const auto rsx = get_current_renderer();
 			return fmt::format("RSX [0x%07x]", rsx->ctrl ? +rsx->ctrl->get : 0);
 		};
-
 		if (!serialized) method_registers.init();
-
 		rsx::overlays::reset_performance_overlay();
 		rsx::overlays::reset_debug_overlay();
 
@@ -1105,7 +1103,6 @@ namespace rsx
 			// Backend did not provide an implementation, provide NULL object
 			zcull_ctrl = std::make_unique<::rsx::reports::ZCULL_control>();
 		}
-
 		check_zcull_status(false);
 		nv4097::set_render_mode(m_ctx, 0, method_registers.registers[NV4097_SET_RENDER_ENABLE]);
 
@@ -1120,10 +1117,19 @@ namespace rsx
 				Emu.RunPPU();
 			});
 		}
-
 		// Wait for startup (TODO)
 		while (!rsx_thread_running || Emu.IsPausedOrReady())
 		{
+#ifdef RPCS3_UWP
+			// Initial iomap needs eng_lock before the guest starts the FIFO.
+			// Acknowledge using the normal pause protocol even during startup;
+			// otherwise PPU waits for RSX while RSX waits for guest startup.
+			if (external_interrupt_lock)
+			{
+				wait_pause();
+			}
+#endif
+
 			// Execute backend-local tasks first
 			do_local_task(performance_counters.state);
 
@@ -3326,6 +3332,7 @@ namespace rsx
 	void thread::pause()
 	{
 		external_interrupt_lock++;
+		on_pause_request();
 
 		while (!external_interrupt_ack && !is_stopped())
 		{

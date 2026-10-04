@@ -17,6 +17,7 @@
 #include "Emu/Cell/Modules/cellSync.h"
 
 #include "SPUThread.h"
+#include "timers.hpp"
 #include "SPUAnalyser.h"
 #include "SPUInterpreter.h"
 #include "SPUDisAsm.h"
@@ -2351,6 +2352,7 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 
 	// LS pointer
 	const auto base = static_cast<const u8*>(ls);
+
 
 	while (true)
 	{

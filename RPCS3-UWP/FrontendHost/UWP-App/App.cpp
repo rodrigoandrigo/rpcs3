@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -93,6 +94,7 @@ void WriteFailure(std::string_view message)
 	{
 	}
 }
+
 
 std::vector<InputControlDescriptor> SampleGamepadControls()
 {
@@ -174,7 +176,6 @@ std::vector<InputCaptureSample> ReadSampleInputDevices()
 		button("RightThumb", held(GamingInput::GamepadButtons::RightThumbstick));
 		button("Menu", held(GamingInput::GamepadButtons::Menu));
 		button("View", held(GamingInput::GamepadButtons::View));
-		button("Pointer Press", held(GamingInput::GamepadButtons::RightThumbstick));
 		value("LeftStickX+", reading.LeftThumbstickX);
 		value("LeftStickX-", -reading.LeftThumbstickX);
 		value("LeftStickY+", reading.LeftThumbstickY);
@@ -256,6 +257,11 @@ public:
 	}
 
 	void RequestClose() noexcept { m_closed = true; }
+	void QueuePanelResize(std::uint32_t width, std::uint32_t height, float x, float y)
+	{
+		std::lock_guard lock(m_panelSizeMutex);
+		m_panelSize = PanelSize{width, height, x, y};
+	}
 
 	// SwapChainPanel::SetSwapChain must be performed on the XAML UI thread.
 	// The shell calls this during rpcs3_frontend_create(), before Run() is
@@ -272,11 +278,10 @@ public:
 		io.LogFilename = nullptr;
 		const auto width = m_pixelWidth;
 		const auto height = m_pixelHeight;
-		const float uiScale = std::max(0.1f, std::min(
-			static_cast<float>(width) / 1280.0f,
-			static_cast<float>(height) / 720.0f));
-		LoadFrontendFonts(io, uiScale);
+		// Layout dimensions are pixels, so fonts must use the same unit.
+		LoadFrontendFonts(io, 1.0f);
 		m_renderer.Initialize(m_swapChainPanel.Get(), width, height);
+		m_renderer.SetCompositionScale(m_rasterizationScale, m_rasterizationScale);
 		m_frontend.Host().SetTextureCallbacks(
 			[this](const std::filesystem::path& path) { return m_renderer.LoadTexture(path); },
 			[this](TextureHandle texture) { m_renderer.ReleaseTexture(texture); });
@@ -299,10 +304,7 @@ public:
 				io.IniFilename = nullptr;
 				io.LogFilename = nullptr;
 				const auto [width, height] = PixelSize(m_window);
-				const float uiScale = std::max(0.1f, std::min(
-					static_cast<float>(width) / 1280.0f,
-					static_cast<float>(height) / 720.0f));
-				LoadFrontendFonts(io, uiScale);
+				LoadFrontendFonts(io, 1.0f);
 				m_renderer.Initialize(m_window, width, height);
 				m_frontend.Host().SetTextureCallbacks(
 					[this](const std::filesystem::path& path) { return m_renderer.LoadTexture(path); },
@@ -455,7 +457,7 @@ private:
 
 	void ResizeForWindow()
 	{
-		if (!m_window)
+		if (!m_window || m_xamlHosted)
 			return;
 		const auto [width, height] = PixelSize(m_window);
 		if (m_initialized)
@@ -525,6 +527,19 @@ private:
 
 	void DrawFrame()
 	{
+		if (m_xamlHosted)
+		{
+			std::optional<PanelSize> size;
+			{
+				std::lock_guard lock(m_panelSizeMutex);
+				size.swap(m_panelSize);
+			}
+			if (size)
+			{
+				m_renderer.Resize(size->width, size->height);
+				m_renderer.SetCompositionScale(size->x, size->y);
+			}
+		}
 #ifdef RPCS3_HOST_WITH_CORE
 		(void)rpcs3_core_pump();
 		if (m_coreReady && !m_coreGraphicsChecked)
@@ -542,7 +557,14 @@ private:
 			1.0f / 1000.0f, 0.1f);
 		m_lastFrame = now;
 		FrameInput input = ReadInput(deltaSeconds);
-		SubmitImGuiNavigationInput(input,
+		auto navigationInput = input;
+		// Xbox pointer mode can report A as both a pointer click and gamepad
+		// confirmation. A click must not also activate the previously focused item.
+		if (m_pointerPressed)
+			navigationInput.accept = false;
+		if (m_frontend.Host().OwnsOverlayInput() || m_frontend.Host().GetRunningContent().running)
+			navigationInput.menu = false;
+		SubmitImGuiNavigationInput(navigationInput,
 			GamingInput::Gamepad::Gamepads().Size() > 0);
 
 		ImGuiIO& io = ImGui::GetIO();
@@ -562,35 +584,28 @@ private:
 		presentation.font = m_shellFont;
 		presentation.controllerStatus =
 			GamingInput::Gamepad::Gamepads().Size() > 0 ? "1 pad" : "No pad";
-		m_frontend.DrawFrame(input, presentation);
+		const bool gameRunning = m_frontend.Host().GetRunningContent().running;
+		const bool stopPressed = KeyDown(System::VirtualKey::Escape) || (input.menu && input.view);
+		static bool previousStopPressed = false;
+		if (gameRunning && stopPressed && !previousStopPressed)
+			m_frontend.Host().Execute(HostCommand::StopContent);
+		previousStopPressed = stopPressed;
+		if (!gameRunning)
+			m_frontend.DrawFrame(input, presentation);
 #ifdef RPCS3_HOST_WITH_CORE
 		void* frameResource = nullptr;
 		uint64_t serial = 0;
-		if (rpcs3_core_acquire_d3d12_frame(&frameResource, &serial) == RPCS3_CORE_OK)
+		if (gameRunning)
+		{
+			// Cover the complete app client area while booting or rendering.
+			ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 255));
+		}
+		if (gameRunning && rpcs3_core_acquire_d3d12_frame(&frameResource, &serial) == RPCS3_CORE_OK)
 		{
 			Microsoft::WRL::ComPtr<ID3D12Resource> frame;
 			frame.Attach(static_cast<ID3D12Resource*>(frameResource));
 			const auto texture = m_renderer.ImportCoreFrame(frame.Get());
-			ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.8f, io.DisplaySize.y * 0.8f), ImGuiCond_FirstUseEver);
-			if (ImGui::Begin("RPCS3 video"))
-			{
-				const auto available = ImGui::GetContentRegionAvail();
-				const float scale = std::min(available.x / texture.width, available.y / texture.height);
-				if (scale > 0) ImGui::Image(reinterpret_cast<ImTextureID>(texture.id), ImVec2(texture.width * scale, texture.height * scale));
-			}
-			ImGui::End();
-		}
-		else if (m_frontend.Host().GetRunningContent().running)
-		{
-			ImGui::SetNextWindowSize(ImVec2(480.0f, 150.0f), ImGuiCond_FirstUseEver);
-			if (ImGui::Begin("RPCS3 video"))
-			{
-				ImGui::TextUnformatted("The core is active, but no video frame is available yet.");
-				ImGui::TextWrapped("This does not confirm that the game is progressing. Check RPCS3.log for guest or renderer errors.");
-				if (ImGui::Button("Stop game"))
-					m_frontend.Host().Execute(HostCommand::StopContent);
-			}
-			ImGui::End();
+			ImGui::GetBackgroundDrawList()->AddImage(reinterpret_cast<ImTextureID>(texture.id), ImVec2(0, 0), io.DisplaySize);
 		}
 #endif
 		m_renderer.EndFrame();
@@ -655,6 +670,9 @@ private:
 	std::uint32_t m_pixelWidth = 1;
 	std::uint32_t m_pixelHeight = 1;
 	float m_rasterizationScale = 1.0f;
+	struct PanelSize { std::uint32_t width, height; float x, y; };
+	std::mutex m_panelSizeMutex;
+	std::optional<PanelSize> m_panelSize;
 #ifdef RPCS3_HOST_WITH_CORE
 	std::vector<std::string> m_coreLogTail;
 	UI::CoreDispatcher m_coreDispatcher{nullptr};
@@ -717,6 +735,13 @@ extern "C" __declspec(dllexport) void rpcs3_frontend_run(void* value)
 	{
 		WriteFailure("XAML frontend worker: unknown exception");
 	}
+}
+
+extern "C" __declspec(dllexport) void rpcs3_frontend_resize(void* value,
+	std::uint32_t width, std::uint32_t height, float x, float y)
+{
+	if (auto* handle = static_cast<FrontendRuntimeHandle*>(value))
+		handle->app->QueuePanelResize(width, height, x, y);
 }
 
 extern "C" __declspec(dllexport) void rpcs3_frontend_stop(void* value)
