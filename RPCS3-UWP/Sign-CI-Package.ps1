@@ -2,17 +2,44 @@
 param()
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Enter-MsvcEnvironment.ps1')
-if (-not $env:RUNNER_TEMP -or -not $env:UWP_SIGNING_PFX_BASE64) { throw 'Runner temporary directory and signing secret are required.' }
+if (-not $env:RUNNER_TEMP) { throw 'Runner temporary directory is required.' }
 $root = Split-Path $PSScriptRoot -Parent
 $output = Join-Path $root 'build-uwp-msvc\ci-artifacts'
 $key = Join-Path $env:RUNNER_TEMP 'rpcs3-uwp-signing.pfx'
 $cert = $null
 $addedTrust = $false
 try {
+    [xml]$manifest = Get-Content (Join-Path $PSScriptRoot 'FrontendHost\UWP-App\Package.appxmanifest') -Raw
+    $signingMode = 'Configured certificate'
+    if (-not $env:UWP_SIGNING_PFX_BASE64) {
+        $signingMode = 'Temporary development certificate (new identity key for this run)'
+        $rsa = [Security.Cryptography.RSA]::Create(2048)
+        $generated = $null
+        try {
+            $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
+                [string]$manifest.Package.Identity.Publisher, $rsa,
+                [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+            $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+                [Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature, $true))
+            $usage = [Security.Cryptography.OidCollection]::new()
+            [void]$usage.Add([Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3'))
+            $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($usage, $false))
+            $generated = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-5), [DateTimeOffset]::UtcNow.AddMonths(3))
+            $env:UWP_SIGNING_PFX_PASSWORD = [guid]::NewGuid().ToString('N')
+            Write-Host "::add-mask::$env:UWP_SIGNING_PFX_PASSWORD"
+            [IO.File]::WriteAllBytes($key, $generated.Export(
+                [Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $env:UWP_SIGNING_PFX_PASSWORD))
+        } finally {
+            if ($generated) { $generated.Dispose() }
+            $rsa.Dispose()
+        }
+        Write-Warning 'Signing with a temporary development certificate. Trust the included public .cer on the target device; use a persistent PFX secret for release updates.'
+    } else {
     [IO.File]::WriteAllBytes($key, [Convert]::FromBase64String($env:UWP_SIGNING_PFX_BASE64))
+    }
     $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($key,
         $env:UWP_SIGNING_PFX_PASSWORD, [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
-    [xml]$manifest = Get-Content (Join-Path $PSScriptRoot 'FrontendHost\UWP-App\Package.appxmanifest') -Raw
     if (-not $cert.HasPrivateKey -or $cert.Subject -ne $manifest.Package.Identity.Publisher) {
         throw 'Certificate must contain a private key and match the manifest Publisher exactly.'
     }
@@ -42,6 +69,8 @@ try {
     Copy-Item (Join-Path $root 'build-uwp-msvc\uwp-audit.json') $output
     $framework = 'C:\Program Files (x86)\Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs\14.0\Appx\Retail\x64\Microsoft.VCLibs.x64.14.00.appx'
     Copy-Item -LiteralPath $framework -Destination $output
+    "$signingMode`nSubject: $($cert.Subject)`nThumbprint: $($cert.Thumbprint)`nExpires: $($cert.NotAfter.ToUniversalTime().ToString('o'))" |
+        Out-File (Join-Path $output 'signing-info.txt') -Encoding utf8
     $sdlCommit = git -C (Join-Path $root '.ci\SDL3_UWP') rev-parse HEAD
     if ($LASTEXITCODE) { throw 'Could not record SDL3_UWP revision.' }
     "RPCS3=$env:GITHUB_SHA`nSDL3_UWP=$sdlCommit" | Out-File (Join-Path $output 'revisions.txt') -Encoding utf8

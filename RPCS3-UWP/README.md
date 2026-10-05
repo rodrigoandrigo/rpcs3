@@ -19,7 +19,7 @@ Before running:
 1. Push the complete project, including modified vendored Mesa and frontend
    sources. Commit submodule references and `.gitmodules` for dependencies that
    are not vendored. Do not commit build outputs, game/firmware files or PFX keys.
-2. In **Settings > Secrets and variables > Actions**, add
+2. For a persistent release signing key, in **Settings > Secrets and variables > Actions**, add
    `UWP_SIGNING_PFX_BASE64`: the Base64 encoding of the signing PFX file.
    Add `UWP_SIGNING_PFX_PASSWORD` if the PFX has a password (otherwise leave it unset).
 3. The certificate must include its private key, be valid, allow code signing,
@@ -28,7 +28,11 @@ Before running:
    to bypass a signing error. Keep the existing certificate for compatible updates.
 4. Open **Actions > Build and sign RPCS3-UWP > Run workflow**, or push to
    `main`/`master`, or push an `uwp-v*` tag. This workflow does not run on
-   untrusted pull requests and requires signing secrets even for branch builds.
+   untrusted pull requests. Without a PFX secret, it generates a temporary
+   self-signed development certificate and still builds and signs the package.
+   This certificate changes on each run: trust the included public `.cer` on
+   the target device, and do not use this mode for compatible release updates.
+   Use the same persistent PFX secret for packages intended to update an existing installation.
 
 To copy the PFX encoding into the clipboard locally, without printing the key:
 
@@ -44,6 +48,8 @@ in the runner's temporary directory and removed after signing. Only the
 public certificate is temporarily trusted on the runner for signature
 verification; this does not install the application. Artifacts expire after
 14 days. No release is published automatically.
+The artifact also includes `signing-info.txt`, identifying the signing mode,
+public certificate thumbprint and expiration date.
 
 The signing step verifies the bundle with SignTool. Self-signed certificates
 still need to be trusted on the target Windows device; Xbox deployment follows
