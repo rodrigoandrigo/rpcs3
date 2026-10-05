@@ -63,7 +63,7 @@ jobs:
           release: false
           path-type: inherit
           install: >-
-            make bison flex git diffutils patch pkgconf
+            make bison flex git diffutils patch pkgconf gawk sed
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
 

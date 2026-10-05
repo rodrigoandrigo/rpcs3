@@ -2,6 +2,20 @@
 param([int]$Jobs = 4, [switch]$Clean)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Enter-MsvcEnvironment.ps1')
+# Do not mix Git-for-Windows/runner Unix utilities with MSYS2's bash/make.
+# The MSVC bin directory stays first so link.exe is the COFF linker, not
+# MSYS2's filesystem utility. Force make recipes to use the same bash too.
+$msvcBin = Split-Path (Get-Command cl.exe -ErrorAction Stop).Source -Parent
+$env:PATH = "$msvcBin;C:\msys64\usr\bin;C:\msys64\ucrt64\bin;$env:PATH"
+$env:SHELL = 'C:/msys64/usr/bin/bash.exe'
+$env:LC_ALL = 'C'
+$env:VSLANG = '1033'
+foreach ($utility in @('bash.exe', 'make.exe', 'sed.exe', 'awk.exe')) {
+    $resolved = (Get-Command $utility -ErrorAction Stop).Source
+    if (-not $resolved.StartsWith('C:\msys64\usr\bin\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "FFmpeg requires MSYS2 $utility, resolved instead: $resolved"
+    }
+}
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $source = Join-Path $repositoryRoot 'build-uwp-msvc\ffmpeg-source'
 $expectedCommit = '140fd653aed8cad774f991ba083e2d01e86420c7'
@@ -36,12 +50,12 @@ try {
     & C:\msys64\usr\bin\bash.exe @arguments
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
     if ($Clean) {
-        & C:\msys64\usr\bin\make.exe clean
+        & C:\msys64\usr\bin\make.exe 'SHELL=C:/msys64/usr/bin/bash.exe' clean
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
     }
-    & C:\msys64\usr\bin\make.exe "-j$Jobs"
+    & C:\msys64\usr\bin\make.exe 'SHELL=C:/msys64/usr/bin/bash.exe' "-j$Jobs"
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    & C:\msys64\usr\bin\make.exe install
+    & C:\msys64\usr\bin\make.exe 'SHELL=C:/msys64/usr/bin/bash.exe' install
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
     foreach ($component in @('avcodec', 'avformat', 'avutil', 'avfilter', 'swscale', 'swresample')) {
         $library = Join-Path $prefix "lib\lib$component.a"
