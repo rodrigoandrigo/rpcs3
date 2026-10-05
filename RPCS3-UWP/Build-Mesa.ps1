@@ -44,4 +44,9 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $dxil = Join-Path $env:WindowsSdkDir 'Redist\D3D\x64\dxil.dll'
 if (-not (Test-Path -LiteralPath $dxil -PathType Leaf)) { throw "Windows SDK DXIL redistributable missing: $dxil" }
 Copy-Item -LiteralPath $dxil -Destination (Join-Path $mesaBuildRoot 'src\gallium\targets\libgl-gdi\dxil.dll')
+foreach ($artifact in @('src/gallium/targets/libgl-gdi/opengl32.lib',
+    'src/gallium/targets/libgl-gdi/opengl32.dll', 'src/gallium/targets/wgl/gallium_wgl.dll',
+    'src/gallium/targets/libgl-gdi/dxil.dll')) {
+    if (-not (Test-Path (Join-Path $mesaBuildRoot $artifact))) { throw "Mesa build did not produce required artifact: $artifact" }
+}
 exit 0

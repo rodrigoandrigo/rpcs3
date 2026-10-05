@@ -51,6 +51,7 @@ else()
 endif()
 
 # libusb
+if(NOT RPCS3_BUILD_CORE_DLL)
 if(CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD")
 	pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0>=1.0 )
 	cmake_dependent_option(USE_SYSTEM_LIBUSB "Use system libusb-1.0 as shared library" ON
@@ -87,6 +88,7 @@ endif()
 
 # hidapi
 add_subdirectory(hidapi)
+endif()
 
 # glslang
 add_subdirectory(glslang EXCLUDE_FROM_ALL)
@@ -97,7 +99,13 @@ add_subdirectory(yaml-cpp)
 
 # OpenGL
 
-if (NOT ANDROID AND NOT APPLE)
+if(RPCS3_BUILD_CORE_DLL AND RPCS3_UWP_MESA)
+	add_library(3rdparty_opengl INTERFACE)
+	target_include_directories(3rdparty_opengl BEFORE INTERFACE
+		"${CMAKE_CURRENT_SOURCE_DIR}/mesa/include" "${CMAKE_CURRENT_SOURCE_DIR}/GL")
+	target_link_libraries(3rdparty_opengl INTERFACE
+		"${RPCS3_UWP_MESA_ROOT}/src/gallium/targets/libgl-gdi/opengl32.lib")
+elseif (NOT ANDROID AND NOT APPLE AND NOT RPCS3_BUILD_CORE_DLL)
 	find_package(OpenGL REQUIRED OPTIONAL_COMPONENTS EGL)
 
 	add_library(3rdparty_opengl INTERFACE)
@@ -124,7 +132,9 @@ add_subdirectory(stblib)
 add_subdirectory(discord-rpc)
 
 # Cubeb
-if(USE_SYSTEM_CUBEB)
+if(RPCS3_BUILD_CORE_DLL)
+    message(STATUS "UWP: cubeb disabled; no desktop audio backend is linked")
+elseif(USE_SYSTEM_CUBEB)
 	find_package(cubeb REQUIRED GLOBAL)
 	message(STATUS "Using system cubeb version '${cubeb_VERSION}'")
 	add_library(3rdparty::cubeb ALIAS cubeb::cubeb)
@@ -211,7 +221,29 @@ add_subdirectory(asmjit EXCLUDE_FROM_ALL)
 # SDL3
 set(SDL3_TARGET 3rdparty_dummy_lib)
 if(USE_SDL)
-	if(USE_SYSTEM_SDL)
+	if(RPCS3_SDL3_SOURCE_DIR)
+		if(NOT EXISTS "${RPCS3_SDL3_SOURCE_DIR}/CMakeLists.txt")
+			message(FATAL_ERROR "RPCS3_SDL3_SOURCE_DIR must contain SDL3 sources")
+		endif()
+		message(STATUS "Using external SDL3 sources: ${RPCS3_SDL3_SOURCE_DIR}")
+		if(RPCS3_BUILD_CORE_DLL)
+			set(SDL_SHARED OFF CACHE BOOL "UWP embeds SDL statically" FORCE)
+			set(SDL_STATIC ON CACHE BOOL "UWP embeds SDL statically" FORCE)
+		endif()
+		add_subdirectory("${RPCS3_SDL3_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/sdl3-external" EXCLUDE_FROM_ALL)
+		if(RPCS3_BUILD_CORE_DLL AND NOT TARGET SDL3-static)
+			message(FATAL_ERROR "SDL3_UWP did not create SDL3-static. Check the external SDL source and its configuration.")
+		endif()
+		if(RPCS3_BUILD_CORE_DLL AND MSVC AND CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+			# The external WinRT implementation uses /ZW, incompatible with C++20.
+			set_property(TARGET SDL3-static PROPERTY CXX_STANDARD 17)
+		endif()
+		add_library(3rdparty_sdl3 INTERFACE)
+		target_compile_definitions(3rdparty_sdl3 INTERFACE HAVE_SDL3=1)
+		target_link_libraries(3rdparty_sdl3 INTERFACE SDL3::SDL3)
+		set(SDL3_TARGET 3rdparty_sdl3)
+		set(SDL3_DIR "${CMAKE_CURRENT_BINARY_DIR}/sdl3-external" CACHE PATH "External SDL3 package configuration" FORCE)
+	elseif(USE_SYSTEM_SDL)
 		find_package(SDL3)
 		if(SDL3_FOUND AND SDL3_VERSION VERSION_GREATER_EQUAL 3.2.0)
 			message(STATUS "Using system SDL3 version '${SDL3_VERSION}'")
@@ -232,7 +264,7 @@ if(USE_SDL)
 endif()
 
 # OpenAL
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT RPCS3_BUILD_CORE_DLL)
 	add_subdirectory(OpenAL EXCLUDE_FROM_ALL)
 else()
 	add_library(3rdparty_openal INTERFACE)
@@ -282,7 +314,13 @@ if(NOT ANDROID)
 	add_library(3rdparty_ffmpeg INTERFACE)
 
 	# Select the version of ffmpeg to use, default is builtin
-	if(USE_SYSTEM_FFMPEG)
+	if(RPCS3_BUILD_CORE_DLL AND CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+		if(USE_SYSTEM_FFMPEG)
+			message(FATAL_ERROR "UWP: system desktop FFmpeg is not allowed; use RPCS3_UWP_FFMPEG_ROOT")
+		endif()
+		add_subdirectory(ffmpeg EXCLUDE_FROM_ALL)
+		target_link_libraries(3rdparty_ffmpeg INTERFACE ffmpeg)
+	elseif(USE_SYSTEM_FFMPEG)
 		message(STATUS "RPCS3: using shared ffmpeg")
 		find_package(FFMPEG REQUIRED)
 
@@ -339,10 +377,12 @@ add_subdirectory(wolfssl EXCLUDE_FROM_ALL)
 add_subdirectory(curl EXCLUDE_FROM_ALL)
 
 # MINIUPNP
+if(NOT RPCS3_BUILD_CORE_DLL)
 add_subdirectory(miniupnp EXCLUDE_FROM_ALL)
 
 # RTMIDI
 add_subdirectory(rtmidi EXCLUDE_FROM_ALL)
+endif()
 
 # OPENCV
 add_subdirectory(opencv EXCLUDE_FROM_ALL)
@@ -354,7 +394,9 @@ add_subdirectory(fusion EXCLUDE_FROM_ALL)
 add_subdirectory(feralinteractive EXCLUDE_FROM_ALL)
 
 # add nice ALIAS targets for ease of use
-if(USE_SYSTEM_LIBUSB)
+if(RPCS3_BUILD_CORE_DLL)
+    message(STATUS "UWP: libusb, HIDAPI, RtMidi and miniupnpc excluded")
+elseif(USE_SYSTEM_LIBUSB)
 	add_library(3rdparty::libusb ALIAS usb-1.0-shared)
 else()
 	add_library(3rdparty::libusb ALIAS usb-1.0-static)
@@ -366,7 +408,9 @@ add_library(3rdparty::protobuf ALIAS 3rdparty_protobuf)
 add_library(3rdparty::pugixml ALIAS pugixml)
 add_library(3rdparty::glslang ALIAS 3rdparty_glslang)
 add_library(3rdparty::yaml-cpp ALIAS yaml-cpp)
+if(NOT RPCS3_BUILD_CORE_DLL)
 add_library(3rdparty::hidapi ALIAS 3rdparty_hidapi)
+endif()
 add_library(3rdparty::libpng ALIAS ${LIBPNG_TARGET})
 add_library(3rdparty::opengl ALIAS 3rdparty_opengl)
 add_library(3rdparty::stblib ALIAS 3rdparty_stblib)
@@ -381,8 +425,10 @@ add_library(3rdparty::wolfssl ALIAS wolfssl)
 add_library(3rdparty::libcurl ALIAS 3rdparty_libcurl)
 add_library(3rdparty::soundtouch ALIAS soundtouch)
 add_library(3rdparty::sdl3 ALIAS ${SDL3_TARGET})
+if(NOT RPCS3_BUILD_CORE_DLL)
 add_library(3rdparty::miniupnpc ALIAS 3rdparty_miniupnpc)
 add_library(3rdparty::rtmidi ALIAS rtmidi)
+endif()
 add_library(3rdparty::opencv ALIAS ${OPENCV_TARGET})
 add_library(3rdparty::fusion ALIAS Fusion)
 add_library(3rdparty::feralinteractive ALIAS 3rdparty_feralinteractive)

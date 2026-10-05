@@ -18,7 +18,18 @@ $env:PKG_CONFIG_LIBDIR = $emptyPkgConfig
 $env:PKG_CONFIG_PATH = $emptyPkgConfig
 if (-not $FfmpegRoot) { $FfmpegRoot = Join-Path $repositoryRoot 'build-uwp-msvc\ffmpeg-uwp' }
 if (-not $SdlSource) { $SdlSource = 'C:\Users\rodri\Dev1\Projetos\SDL3-uwp' }
+$SdlSource = [IO.Path]::GetFullPath($SdlSource).Replace('\', '/')
 if (-not (Test-Path (Join-Path $SdlSource 'CMakeLists.txt'))) { throw "SDL3_UWP source missing: $SdlSource" }
+$mesaRoot = (Join-Path $repositoryRoot 'build-uwp-msvc\mesa').Replace('\', '/')
+if ($MesaOpenGL) {
+    foreach ($artifact in @('src/gallium/targets/libgl-gdi/opengl32.lib',
+        'src/gallium/targets/libgl-gdi/opengl32.dll', 'src/gallium/targets/wgl/gallium_wgl.dll',
+        'src/gallium/targets/libgl-gdi/dxil.dll')) {
+        if (-not (Test-Path (Join-Path $mesaRoot $artifact))) { throw "Mesa build artifact missing: $mesaRoot/$artifact. Run Build-Mesa.ps1 first." }
+    }
+}
+Write-Host "SDL3_UWP source: $SdlSource"
+Write-Host "Mesa build root: $mesaRoot"
 $d3d12Option = if ($ExperimentalD3D12) { 'ON' } else { 'OFF' }
 $mesaOption = if ($MesaOpenGL) { 'ON' } else { 'OFF' }
 if ($MesaOpenGL) { $d3d12Option = 'ON' }
@@ -29,6 +40,7 @@ if ($MesaOpenGL) { $d3d12Option = 'ON' }
     "-DRPCS3_UWP_FFMPEG_ROOT=$FfmpegRoot" `
     "-DRPCS3_UWP_D3D12=$d3d12Option" `
     "-DRPCS3_UWP_MESA=$mesaOption" `
+    "-DRPCS3_UWP_MESA_ROOT=$mesaRoot" `
     '-DUSE_LTO=OFF' '-DUSE_NATIVE_INSTRUCTIONS=OFF' '-DUSE_FAUDIO=OFF' `
     '-DUSE_SYSTEM_ZLIB=OFF' '-DUSE_SYSTEM_CURL=OFF' '-DUSE_SYSTEM_LIBUSB=OFF' `
     '-DUSE_LIBEVDEV=OFF' '-DUSE_SDL=ON' '-DUSE_SYSTEM_SDL=OFF' `

@@ -84,7 +84,7 @@ jobs:
         run: ./RPCS3-UWP/Build-Mesa.ps1 -Jobs 4
 
       - name: Build Qt-free RPCS3 DLL
-        run: ./RPCS3-UWP/Build-Core.ps1 -Configuration Release -MesaOpenGL -ExperimentalD3D12
+        run: ./RPCS3-UWP/Build-Core.ps1 -Configuration Release -MesaOpenGL -ExperimentalD3D12 -SdlSource "$env:GITHUB_WORKSPACE/.ci/SDL3_UWP"
 
       - name: Build frontend and package
         run: ./RPCS3-UWP/Build-Host.ps1 -Configuration Release -MesaOpenGL
