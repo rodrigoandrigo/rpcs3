@@ -4,7 +4,120 @@ RPCS3-UWP is an experimental UWP host for the RPCS3 PlayStation 3 emulator. It e
 
 The project is intended for Windows UWP/AppContainer environments and Xbox development scenarios. It is not an upstream RPCS3 build and does not use the desktop Qt frontend.
 
+## GitHub Actions: complete signed build
+
+The workflow `.github/workflows/rpcs3-uwp.yml` builds Release x64 from source:
+UWP FFmpeg, embedded Mesa OpenGL/Gallium D3D12, the Qt-free RPCS3 DLL,
+the UWP frontend and its MSIX bundle. It uses the `windows-2025-vs2026`
+runner (MSVC/Visual Studio 2026 and Windows SDK), with MSYS2 UCRT64 tools.
+SDL is checked out from [rodrigoandrigo/SDL3_UWP](https://github.com/rodrigoandrigo/SDL3_UWP)
+at `main`; the exact SDL and RPCS3 commits are recorded in the artifact.
+LLVM is deliberately disabled, matching the local UWP build configuration.
+
+Before running:
+
+1. Push the complete project, including modified vendored Mesa and frontend
+   sources. Commit submodule references and `.gitmodules` for dependencies that
+   are not vendored. Do not commit build outputs, game/firmware files or PFX keys.
+2. In **Settings > Secrets and variables > Actions**, add
+   `UWP_SIGNING_PFX_BASE64`: the Base64 encoding of the signing PFX file.
+   Add `UWP_SIGNING_PFX_PASSWORD` if the PFX has a password (otherwise leave it unset).
+3. The certificate must include its private key, be valid, allow code signing,
+   and have a subject matching the manifest Publisher (`CN=rodri` currently).
+   Changing the publisher changes the package identity; do not change it just
+   to bypass a signing error. Keep the existing certificate for compatible updates.
+4. Open **Actions > Build and sign RPCS3-UWP > Run workflow**, or push to
+   `main`/`master`, or push an `uwp-v*` tag. This workflow does not run on
+   untrusted pull requests and requires signing secrets even for branch builds.
+
+To copy the PFX encoding into the clipboard locally, without printing the key:
+
+```powershell
+$certificatePath = 'C:\path\to\RPCS3-UWP_TemporaryKey.pfx'
+[Convert]::ToBase64String([IO.File]::ReadAllBytes($certificatePath)) | Set-Clipboard
+```
+
+The `RPCS3-UWP-x64-<run number>` artifact contains the signed MSIX bundle,
+the **public** certificate, the x64 VCLibs dependency, the static UWP import
+audit, source revisions and SHA-256 hashes. The private PFX is created only
+in the runner's temporary directory and removed after signing. Only the
+public certificate is temporarily trusted on the runner for signature
+verification; this does not install the application. Artifacts expire after
+14 days. No release is published automatically.
+
+The signing step verifies the bundle with SignTool. Self-signed certificates
+still need to be trusted on the target Windows device; Xbox deployment follows
+the device's development-mode process. Successful CI means build, static audit
+and signature verification, not installed-app, guest-game or Xbox validation.
+The workflow has to be run in GitHub to validate the hosted environment.
+
+Reference: [GitHub hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+and [MSYS2 setup action](https://github.com/msys2/setup-msys2).
+
 ## Project layout
+
+### Cached shader startup stack usage (1.0.0.65)
+
+The shader-cache preload FIFO is heap-allocated rather than kept on the renderer
+thread's stack. A captured 1.0.0.64 Windows crash dump showed `shaders_cache::load`
+reserving 992,656 bytes while calling Mesa's GLSL parser, whose additional
+54,184-byte frame exhausted the default thread stack (`0xC00000FD` in `__chkstk`).
+The fix preserves the FIFO capacity, cache format and compilation behavior; it
+does not delete shader caches or increase every thread's stack reservation.
+Release builds retain linker maps for offline address lookup. Package/build
+validation does not substitute for a repeat of the affected guest-game run.
+
+### Default renderer and VSH audio (1.0.0.64)
+
+OpenGL (Mesa Gallium D3D12) is the default when Mesa is enabled, including
+configuration reset. Existing saved renderer selections are preserved; select
+OpenGL or reset Video settings to change an existing installation.
+
+The firmware message `waiting for audio server process ready` is not a Windows
+XAudio2 initialization error. In the examined VSH log, XAudio2 opened successfully,
+but the firmware repeatedly failed to connect to IPC queue `0x80004D494F323200`
+with `CELL_ESRCH`. Offline inspection of the installed firmware shows that
+`sys_audio.sprx` already implements the MIO server and creates this queue in its
+module-start path. That path returns early when `cellUsbd` initialization fails;
+the examined log records `sys_usbd_initialize` returning `CELL_ENOSYS` there.
+
+The UWP core now implements the USB control plane for an empty bus: a validated
+session handle, an empty device list, a driver registry, queued events, blocking
+receivers and termination notifications. State belongs to the emulator context,
+not the host process. This lets the firmware initialize its own MIO service;
+requests/replies, shared-memory buffers and RSXAudio processing remain handled by
+the firmware and existing LV2 implementations, not a fabricated ready response.
+No USB devices or successful physical transfers are invented, and unsupported
+peripheral operations remain explicit errors. No desktop USB library is linked.
+
+The standalone `rpcs3/Embedded/tests/uwp_usb_bus_test.cpp` checks control-plane
+state, driver registration, bounded event FIFO and reset. Native tests and a
+successful DLL/package build do not prove that VSH reaches ready or emits audio
+on Windows AppContainer or Xbox. Test those with the installed firmware; further
+firmware/syscall errors may still prevent startup. USB control-plane savestate
+restoration has not been implemented or validated.
+
+### Game information (1.0.0.62)
+
+The UWP library uses `game_enumeration<GameInfo>`, the same Qt-independent
+PARAM.SFO and ISO reader as the desktop game list. It scans the brokered folder,
+installed HDD titles, registered games and the installed VSH executable. Localized
+titles/icons use the configured PS3 language. Disc updates are merged using the
+upstream version rules. The DLL exports names, serials, application/disc versions,
+categories, firmware requirements, parental levels, boot flags, Move attributes,
+resolution/sound flags, media paths, disk sizes and custom configuration flags.
+ICON0 bytes are copied to LocalState/game-icons for the frontend texture loader;
+picker grants are never replaced by reconstructed desktop paths.
+
+The list displays real metadata and persistent UWP session history. Compatibility
+status/date/latest update are read from an existing RPCS3-format
+`LocalState/rpcs3/GuiConfigs/compat_database.dat`; absent records remain explicitly
+unavailable. No automatic network database download is performed. Movie/music
+paths are exposed but this change does not add animated PAM/ATRAC library previews.
+Desktop Qt play history and configuration-database recommendations are not imported.
+ISO multi-title metadata is enumerated, but the existing boot API does not yet
+accept a per-title game-directory selector. Native metadata tests do not validate
+AppContainer, Xbox, presentation or game execution.
 
 - `RPCS3-UWP.slnx` is the main Visual Studio solution.
 - `RPCS3-UWP.vcxproj` is the orchestration project used by the solution.
@@ -233,6 +346,18 @@ The current source has been validated through:
 These checks are separate from installed-package, retail Xbox, real firmware, real PKG, game compatibility, performance, and Microsoft WACK testing. Those runtime tiers require appropriate hardware and user-supplied content.
 
 ## Troubleshooting
+
+### Tools content is clipped or library selection changes on hover
+
+Version 1.0.0.61 sizes the Tools execution toolbar and three-column controls
+to the available content width, and resets horizontal scrolling. Library table
+hover only highlights rows; selection follows clicks or keyboard/controller
+focus, without hover-triggered selection notifications.
+
+Unknown PRX module and invalid lightweight-mutex errors retain their guest
+error codes. Their normal error messages now include the requested module name
+or numeric mutex ID. This improves error context; it does not emulate a missing
+native `cellLibprof` module or repair an invalid guest mutex automatically.
 
 ### Mesa attempts to compile shaders requiring bindless textures
 

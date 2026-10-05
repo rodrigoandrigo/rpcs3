@@ -1149,7 +1149,7 @@ error_code _sys_prx_get_module_id_by_name(ppu_thread& ppu, vm::cptr<char> name, 
 
 	if (!id)
 	{
-		return CELL_PRX_ERROR_UNKNOWN_MODULE;
+		return {CELL_PRX_ERROR_UNKNOWN_MODULE, module_name};
 	}
 
 	return not_an_error(id);

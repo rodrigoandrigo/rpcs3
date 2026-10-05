@@ -1,15 +1,20 @@
 [CmdletBinding()]
-param([string]$Python = 'python', [int]$Jobs = 4)
+param([string]$Python = 'python', [int]$Jobs = 4,
+    [string]$RuntimeRoot = $env:RPCS3_UWP_VCLIBS_ROOT)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Enter-MsvcEnvironment.ps1')
 $env:PATH += ';C:\msys64\usr\bin;C:\msys64\ucrt64\bin'
 # Meson's native compiler checks execute small Store-CRT binaries. Make the
 # installed framework visible to those checks without installing anything.
+if (-not $RuntimeRoot) {
 $mesaFramework = Get-AppxPackage -Name Microsoft.VCLibs.140.00 |
     Where-Object { $_.Architecture -eq 'X64' -and [version]$_.Version -ge [version]'14.0.33519.0' } |
     Sort-Object Version -Descending | Select-Object -First 1
 if (-not $mesaFramework) { throw 'An installed x64 Microsoft.VCLibs.140.00 UWP framework >= 14.0.33519.0 is required for Meson compiler checks.' }
-$env:PATH += ';' + $mesaFramework.InstallLocation
+$RuntimeRoot = $mesaFramework.InstallLocation
+}
+if (-not (Test-Path (Join-Path $RuntimeRoot 'vcruntime140_app.dll'))) { throw "UWP runtime missing: $RuntimeRoot" }
+$env:PATH += ';' + $RuntimeRoot
 $mesaRepoRoot = Split-Path $PSScriptRoot -Parent
 $mesaBuildRoot = Join-Path $mesaRepoRoot 'build-uwp-msvc\mesa'
 $mesaSourceRoot = Join-Path $mesaRepoRoot '3rdparty\mesa'
@@ -28,7 +33,7 @@ $mesaArguments = @('setup', $mesaBuildRoot, $mesaSourceRoot,
 # /MD still emits the usual import-library names; prefer their Store variants
 # explicitly so Mesa imports *_app.dll, not the desktop VC runtime.
 $mesaArguments += "-Dc_link_args=['/APPCONTAINER','WindowsApp.lib','/LIBPATH:$mesaStoreCRT']"
-$mesaArguments += "-Dcpp_link_args=['/APPCONTAINER','WindowsApp.lib','/LIBPATH:$mesaStoreCRT']"
+$mesaArguments += "-Dcpp_link_args=['/APPCONTAINER','WindowsApp.lib','/LIBPATH:$mesaStoreCRT','/MAP']"
 if (Test-Path (Join-Path $mesaBuildRoot 'meson-private\coredata.dat')) {
     $mesaArguments += '--reconfigure'
 }

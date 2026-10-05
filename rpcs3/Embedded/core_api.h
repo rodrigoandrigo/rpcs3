@@ -48,7 +48,8 @@ enum rpcs3_core_command
     RPCS3_CORE_COMMAND_SET_CONFIG = 10,
     RPCS3_CORE_COMMAND_RESET_CONFIG = 11,
     RPCS3_CORE_COMMAND_INSTALL_PACKAGE = 12,
-    RPCS3_CORE_COMMAND_INSTALL_FIRMWARE = 13
+    RPCS3_CORE_COMMAND_INSTALL_FIRMWARE = 13,
+    RPCS3_CORE_COMMAND_ENUMERATE_GAMES = 14
 };
 
 /* Callback strings are UTF-8, borrowed only until the callback returns.
@@ -104,6 +105,26 @@ RPCS3_CORE_API int32_t rpcs3_core_last_error(char* output, uint32_t capacity, ui
 RPCS3_CORE_API int32_t rpcs3_core_log_path(char* output, uint32_t capacity, uint32_t* required);
 RPCS3_CORE_API int32_t rpcs3_core_log_stats(uint64_t* dropped_callback_records, uint64_t* dropped_file_records);
 RPCS3_CORE_API uint32_t rpcs3_core_state(void);
+
+/* Library scan uses the same PARAM.SFO/ISO reader as the desktop game list.
+ * Run on a background thread with the core stopped. Strings and icon bytes
+ * are borrowed until the callback returns; copy them immediately. root may
+ * be a broker-mounted folder. Installed HDD titles are included as well. */
+struct rpcs3_core_game_info
+{
+    uint32_t struct_size;
+    const char *path, *name, *serial, *app_version, *revision, *category;
+    const char *firmware, *icon_path, *movie_path, *audio_path, *game_dir;
+    uint32_t attributes, bootable, parental_level, resolutions, sound_formats;
+    uint32_t is_iso, custom_icon;
+    const void* icon_data;
+    uint32_t icon_size;
+    uint64_t size_on_disk;
+    uint32_t custom_config, custom_pad_config;
+};
+typedef void (*rpcs3_core_game_callback)(void* user, const struct rpcs3_core_game_info* info);
+RPCS3_CORE_API int32_t rpcs3_core_enumerate_games(const char* root_utf8,
+    rpcs3_core_game_callback callback, void* user);
 
 enum rpcs3_core_config_type
 {

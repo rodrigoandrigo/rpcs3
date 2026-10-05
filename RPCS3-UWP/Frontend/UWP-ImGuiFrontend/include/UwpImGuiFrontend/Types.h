@@ -69,6 +69,14 @@ struct Metadata
 
 struct LibraryItem
 {
+	std::string serial, appVersion, revision, category, firmware;
+	std::string iconPath, moviePath, audioPath, gameDirectory;
+	std::uint32_t attributes = 0, bootable = 0, parentalLevel = 0;
+	std::uint32_t resolutions = 0, soundFormats = 0;
+	bool isIso = false, customIcon = false;
+	bool customConfig = false, customPadConfig = false;
+	std::uint64_t sizeOnDisk = 0, playTimeSeconds = 0;
+	std::string lastPlayed, compatibility, compatibilityDate, latestVersion;
 	ItemId id = 0;
 	std::uint64_t contentId = 0;
 	std::uint32_t version = 0;

@@ -21,7 +21,8 @@ if(RPCS3_UWP_D3D12)
     target_link_libraries(rpcs3_emu PUBLIC d3d12 dxgi d3dcompiler)
 endif()
 # Remove desktop backends and all USB peripheral implementations. With no
-# validated UWP USB transport, guest USB calls explicitly return ENOSYS.
+# UWP USB control plane models an empty bus for firmware IPC startup;
+# physical peripheral operations remain unsupported.
 get_target_property(embedded_sources rpcs3_emu SOURCES)
 list(FILTER embedded_sources EXCLUDE REGEX "(^|/)(Audio/Cubeb/.*|Audio/XAudio2/xaudio2_enumerator|Cell/lv2/sys_usbd|NP/upnp_handler|Io/(Buzz|Dimensions|GameTablet|GHLtar|GunCon3|Infinity|KamenRider|RB3MidiDrums|RB3MidiGuitar|RB3MidiKeyboard|Skylander|TopShotElite|TopShotFearmaster|Turntable|usb_device|usb_microphone|usb_vfs|usio|LogitechG27))\\.cpp$")
 set_property(TARGET rpcs3_emu PROPERTY SOURCES "${embedded_sources}")
@@ -67,5 +68,23 @@ target_compile_options(rpcs3_core PRIVATE /EHsc)
 target_include_directories(rpcs3_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Embedded)
 target_link_libraries(rpcs3_core PRIVATE rpcs3_emu ws2_32 Iphlpapi Psapi windowsapp)
 # Static module registration must survive extraction of the emulator archive.
-target_link_options(rpcs3_core PRIVATE /WINMD:NO "/WHOLEARCHIVE:$<TARGET_FILE:rpcs3_emu>")
+target_link_options(rpcs3_core PRIVATE /WINMD:NO /MAP "/WHOLEARCHIVE:$<TARGET_FILE:rpcs3_emu>")
 set_target_properties(rpcs3_core PROPERTIES OUTPUT_NAME rpcs3-core)
+
+# Offline analysis tool, deliberately excluded from normal builds/packages.
+add_executable(firmware_audio_inspect EXCLUDE_FROM_ALL
+    Embedded/tests/firmware_audio_inspect.cpp
+    Embedded/core_api.cpp Embedded/host_runtime.cpp Embedded/brokered_files.cpp
+    Embedded/audio_source.cpp)
+target_compile_definitions(firmware_audio_inspect PRIVATE RPCS3_CORE_EXPORTS UNICODE _UNICODE)
+target_compile_features(firmware_audio_inspect PRIVATE cxx_std_23)
+target_compile_options(firmware_audio_inspect PRIVATE /EHsc)
+target_link_libraries(firmware_audio_inspect PRIVATE rpcs3_emu ws2_32 Iphlpapi Psapi windowsapp)
+target_link_options(firmware_audio_inspect PRIVATE /WINMD:NO "/WHOLEARCHIVE:$<TARGET_FILE:rpcs3_emu>")
+if(RPCS3_UWP_MESA)
+    target_sources(firmware_audio_inspect PRIVATE Embedded/mesa_frame.cpp)
+endif()
+if(RPCS3_UWP_D3D12)
+    target_compile_definitions(firmware_audio_inspect PRIVATE RPCS3_UWP_D3D12=1)
+    target_include_directories(firmware_audio_inspect PRIVATE "${CMAKE_SOURCE_DIR}/3rdparty/minidx12")
+endif()

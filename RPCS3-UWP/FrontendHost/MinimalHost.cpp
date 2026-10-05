@@ -12,6 +12,7 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.Data.Json.h>
 
 #include <algorithm>
 #include <array>
@@ -63,6 +64,7 @@ MinimalHost::MinimalHost()
 
 MinimalHost::~MinimalHost()
 {
+	SavePlayHistory();
 #ifdef RPCS3_HOST_WITH_CORE
 	*m_alive = false;
 #endif
@@ -378,20 +380,85 @@ winrt::fire_and_forget MinimalHost::LoadGameFolder(std::wstring token)
 	if (!*alive) co_return;
 	m_libraryLoading = false;
 	if (!error.empty()) { m_notifications.Push("Library: " + error); co_return; }
-	if (!folder) co_return; // No saved grant: normal first-run state.
-	char root[256]; std::uint32_t required = 0;
-	const auto mount = "games-" + std::to_string(++m_mountGeneration);
-	const auto result = rpcs3_core_mount_storage(RPCS3_CORE_STORAGE_FOLDER, winrt::get_abi(folder),
-		mount.c_str(), 0, root, sizeof(root), &required);
+	char root[256]{}; std::uint32_t required = 0;
+	const auto mount = folder ? "games-" + std::to_string(++m_mountGeneration) : std::string{};
+	const auto result = folder ? rpcs3_core_mount_storage(RPCS3_CORE_STORAGE_FOLDER, winrt::get_abi(folder),
+		mount.c_str(), 0, root, sizeof(root), &required) : RPCS3_CORE_OK;
 	if (result != RPCS3_CORE_OK) {
 		m_notifications.Push("Library mount rejected: " + std::to_string(result)); co_return;
 	}
 	const std::string mountRoot(root);
-	for (auto& entry : catalogue)
-		entry.launchPath = std::filesystem::path(std::u8string(mountRoot.begin(), mountRoot.end())) / entry.launchPath;
+	m_libraryLoading = true;
+	const auto cache = StateRoot() / "game-icons";
+	try
+	{
+		co_await winrt::resume_background();
+		catalogue.clear();
+		struct ScanContext { std::vector<LibraryItem>* items; std::filesystem::path cache; } context{&catalogue, cache};
+		std::filesystem::create_directories(cache);
+		const auto scanResult = rpcs3_core_enumerate_games(mountRoot.c_str(),
+			[](void* opaque, const rpcs3_core_game_info* info) {
+				auto& context = *static_cast<ScanContext*>(opaque);
+				LibraryItem entry;
+				entry.id = 14695981039346656037ull;
+				for (const unsigned char c : std::string(info->serial) + info->game_dir) { entry.id ^= c; entry.id *= 1099511628211ull; }
+				entry.name = info->name; entry.serial = info->serial;
+				entry.appVersion = info->app_version; entry.revision = info->revision;
+				entry.category = info->category; entry.firmware = info->firmware;
+				entry.attributes = info->attributes; entry.bootable = info->bootable;
+				entry.parentalLevel = info->parental_level; entry.resolutions = info->resolutions;
+				entry.soundFormats = info->sound_formats; entry.isIso = info->is_iso != 0;
+				entry.customIcon = info->custom_icon != 0; entry.gameDirectory = info->game_dir;
+				entry.sizeOnDisk = info->size_on_disk; entry.customConfig = info->custom_config != 0;
+				entry.customPadConfig = info->custom_pad_config != 0;
+				entry.iconPath = info->icon_path; entry.moviePath = info->movie_path; entry.audioPath = info->audio_path;
+				entry.platform = "PS3"; entry.format = entry.isIso ? "ISO" : "Folder";
+				const std::string path(info->path);
+				entry.launchPath = std::filesystem::path(std::u8string(path.begin(), path.end()));
+				if (info->icon_size)
+				{
+					const auto icon = context.cache / (std::to_string(entry.id) + ".png");
+					std::ofstream output(icon, std::ios::binary | std::ios::trunc);
+					output.write(static_cast<const char*>(info->icon_data), info->icon_size);
+					if (output) entry.media.push_back({MediaKind::Cover2D, icon});
+				}
+				context.items->push_back(std::move(entry));
+			}, &context);
+		if (scanResult != RPCS3_CORE_OK) error = "Metadata scan failed: " + std::to_string(scanResult);
+		for (auto& game : catalogue) {
+			std::ifstream history(cache / (std::to_string(game.id) + ".history"));
+			history >> game.playTimeSeconds;
+			history.ignore(); std::getline(history, game.lastPlayed);
+		}
+		std::ifstream database(cache.parent_path() / "rpcs3/GuiConfigs/compat_database.dat", std::ios::binary);
+		if (database) try {
+			const std::string bytes((std::istreambuf_iterator<char>(database)), {});
+			winrt::Windows::Data::Json::JsonObject document;
+			if (winrt::Windows::Data::Json::JsonObject::TryParse(winrt::to_hstring(bytes), document) &&
+				document.GetNamedNumber(L"return_code", -255) >= 0 && document.HasKey(L"results")) {
+				const auto results = document.GetNamedObject(L"results");
+				for (auto& game : catalogue) if (results.HasKey(winrt::to_hstring(game.serial))) {
+					const auto record = results.GetNamedObject(winrt::to_hstring(game.serial));
+					game.compatibility = winrt::to_string(record.GetNamedString(L"status", L"NoResult"));
+					game.compatibilityDate = winrt::to_string(record.GetNamedString(L"date", L""));
+					game.latestVersion = winrt::to_string(record.GetNamedString(L"update", L""));
+				}
+			}
+		}
+		catch (const winrt::hresult_error&) { /* Optional invalid database must not discard the library. */ }
+	}
+	catch (const std::exception& ex) { error = ex.what(); }
+	catch (...) { error = "Metadata scan failed"; }
+	try { co_await winrt::resume_foreground(dispatcher); } catch (...) { co_return; }
+	if (!*alive) co_return;
+	m_libraryLoading = false;
+	if (!error.empty()) {
+		if (!mount.empty()) (void)rpcs3_core_unmount_storage(mount.c_str());
+		m_notifications.Push(error); co_return;
+	}
 	if (!m_gameMount.empty()) (void)rpcs3_core_unmount_storage(m_gameMount.c_str());
 	m_gameMount = mount;
-	m_gamesPath = std::filesystem::path(folder.Name().c_str()); // Display only, never native IO.
+	if (folder) m_gamesPath = std::filesystem::path(folder.Name().c_str()); // Display only, never native IO.
 	SetCatalogue(std::move(catalogue));
 	m_notifications.Push("Brokered library mounted: " + std::to_string(m_catalogue.size()) + " games");
 }
@@ -415,6 +482,8 @@ void MinimalHost::OnCoreEvent(std::uint32_t type, std::uint32_t command,
 	if (type == RPCS3_CORE_EVENT_COMMAND_COMPLETE && result == RPCS3_CORE_OK &&
 		(command == RPCS3_CORE_COMMAND_BOOT || command == RPCS3_CORE_COMMAND_STOP ||
 		 command == RPCS3_CORE_COMMAND_INSTALL_FIRMWARE)) RefreshCoreSettings();
+	if (type == RPCS3_CORE_EVENT_COMMAND_COMPLETE && command == RPCS3_CORE_COMMAND_STOP && result == RPCS3_CORE_OK)
+		SavePlayHistory();
 	if (type == RPCS3_CORE_EVENT_COMMAND_COMPLETE && command == RPCS3_CORE_COMMAND_STOP && result == RPCS3_CORE_OK)
 		m_runningContent = {};
 	if (type == RPCS3_CORE_EVENT_COMMAND_COMPLETE && command == RPCS3_CORE_COMMAND_SHUTDOWN)
@@ -451,9 +520,31 @@ void MinimalHost::OnCoreEvent(std::uint32_t type, std::uint32_t command,
 	if (type == RPCS3_CORE_EVENT_COMMAND_COMPLETE && command == RPCS3_CORE_COMMAND_BOOT)
 	{
 		if (result == RPCS3_CORE_OK && m_pendingCoreLaunch)
+		{
 			m_runningContent = *m_pendingCoreLaunch;
+			for (auto& game : m_catalogue) if (game.id == m_runningContent.id) {
+				m_playingSerial = game.serial; m_gameStarted = std::chrono::steady_clock::now();
+				const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+				std::tm time{}; localtime_s(&time, &now);
+				char date[32]; std::strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", &time);
+				game.lastPlayed = date;
+			}
+		}
 		m_pendingCoreLaunch.reset();
 	}
+}
+
+void MinimalHost::SavePlayHistory()
+{
+	if (m_playingSerial.empty()) return;
+	for (auto& game : m_catalogue) if (game.serial == m_playingSerial) {
+		game.playTimeSeconds += std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::steady_clock::now() - m_gameStarted).count();
+		std::ofstream history(StateRoot() / "game-icons" / (std::to_string(game.id) + ".history"));
+		history << game.playTimeSeconds << '\n' << game.lastPlayed << '\n';
+	}
+	m_playingSerial.clear();
+	if (m_frontend) m_frontend->RefreshCatalogue();
 }
 
 void MinimalHost::RefreshCoreSettings()
@@ -1027,6 +1118,7 @@ void MinimalHost::DrawGraphicsPage()
 
 void MinimalHost::DrawToolsPage()
 {
+	ImGui::SetScrollX(0.0f);
 	SectionTitle("RPCS3 Tools");
 	ImGui::TextDisabled("UWP-native administration backed by the embedded RPCS3 core");
 	ImGui::Separator();
@@ -1035,7 +1127,8 @@ void MinimalHost::DrawToolsPage()
 	const auto coreState = rpcs3_core_state();
 	ImGui::BeginDisabled(!m_coreReady || coreState != 3); // system_state::running
 #endif
-	if (ShellButton("Pause")) Execute(HostCommand::PauseContent);
+	const ImVec2 executionButtonSize{std::max(1.0f, (ImGui::GetContentRegionAvail().x - 4.0f * ImGui::GetStyle().ItemSpacing.x) / 5.0f), 0.0f};
+	if (ShellButton("Pause", executionButtonSize)) Execute(HostCommand::PauseContent);
 #ifdef RPCS3_HOST_WITH_CORE
 	ImGui::EndDisabled();
 #endif
@@ -1043,19 +1136,20 @@ void MinimalHost::DrawToolsPage()
 #ifdef RPCS3_HOST_WITH_CORE
 	ImGui::BeginDisabled(!m_coreReady || coreState != 4); // system_state::paused
 #endif
-	if (ShellButton("Resume")) Execute(HostCommand::ResumeContent);
+	if (ShellButton("Resume", executionButtonSize)) Execute(HostCommand::ResumeContent);
 #ifdef RPCS3_HOST_WITH_CORE
 	ImGui::EndDisabled();
 #endif
 	ImGui::SameLine();
-	if (ShellButton("Stop")) Execute(HostCommand::StopContent);
+	if (ShellButton("Stop", executionButtonSize)) Execute(HostCommand::StopContent);
 	ImGui::SameLine();
-	if (ShellButton("Eject disc")) Execute(HostCommand::EjectDisc);
+	if (ShellButton("Eject disc", executionButtonSize)) Execute(HostCommand::EjectDisc);
 	ImGui::SameLine();
-	if (ShellButton("Save settings")) Execute(HostCommand::SaveSettings);
+	if (ShellButton("Save settings", executionButtonSize)) Execute(HostCommand::SaveSettings);
 
-	const auto toolButton = [](const char* label) {
-		return ShellButton(label, { 245.0f, 0.0f });
+	const float toolWidth = std::max(1.0f, (ImGui::GetContentRegionAvail().x - 2.0f * ImGui::GetStyle().ItemSpacing.x) / 3.0f);
+	const auto toolButton = [toolWidth](const char* label) {
+		return ShellButton(label, { toolWidth, 0.0f });
 	};
 	const auto nextColumn = [](int index) { if ((index % 3) != 2) ImGui::SameLine(); };
 	const auto settings = [this](std::string page) {
@@ -1098,6 +1192,7 @@ void MinimalHost::DrawToolsPage()
 	if (toolButton("IPC settings")) settings("IPC"); nextColumn(column++);
 	if (toolButton("System and users")) settings("System"); nextColumn(column++);
 	if (toolButton("Auto-pause and miscellaneous")) settings("Miscellaneous"); nextColumn(column++);
+	if (column % 3) ImGui::NewLine();
 
 	ImGui::Spacing();
 	ImGui::TextUnformatted("Diagnostics");

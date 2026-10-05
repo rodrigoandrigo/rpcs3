@@ -8,6 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Enter-MsvcEnvironment.ps1')
+if (-not $VcpkgRoot) { $VcpkgRoot = $env:VCPKG_INSTALLATION_ROOT }
 if (-not $VcpkgRoot) { $VcpkgRoot = Join-Path $visualStudioPath 'VC\vcpkg' }
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $hostBuild = Join-Path $repositoryRoot 'build-uwp-msvc\host'
@@ -17,6 +18,7 @@ $withMesa = if ($MesaOpenGL -and -not $FrontendOnly) { 'ON' } else { 'OFF' }
 & 'C:\msys64\ucrt64\bin\cmake.exe' -S $PSScriptRoot -B $hostBuild `
     -G 'Visual Studio 18 2026' -A x64 `
     '-DCMAKE_SYSTEM_NAME=WindowsStore' '-DCMAKE_SYSTEM_VERSION=10.0' `
+    '-DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=10.0.26100.0' `
     "-DCMAKE_TOOLCHAIN_FILE=$VcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
     "-DVCPKG_MANIFEST_DIR=$PSScriptRoot/Frontend" `
     '-DVCPKG_TARGET_TRIPLET=x64-uwp-static' `

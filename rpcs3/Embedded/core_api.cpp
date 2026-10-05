@@ -8,6 +8,9 @@
 #include "Emu/vfs_config.h"
 #include "Emu/IPC_config.h"
 #include "Emu/system_utils.hpp"
+#include "Emu/GameInfo.h"
+#include "Loader/PSF.h"
+#include "Emu/game_enumeration.h"
 #include "Emu/IdManager.h"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/D3D12/D3D12Presentation.h"
@@ -41,6 +44,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <chrono>
+#include <future>
 
 std::string g_input_config_override;
 atomic_t<bool> g_headless{false};
@@ -183,7 +187,7 @@ namespace
 			if (path == "Video/Renderer")
 			{
 				entry.value = g_cfg.video.renderer == video_renderer::opengl ? "OpenGL (Mesa Gallium D3D12)" : "Direct3D 12";
-				entry.default_value = "Direct3D 12";
+				entry.default_value = "OpenGL (Mesa Gallium D3D12)";
 				entry.enum_values = "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)";
 			}
 #endif
@@ -540,8 +544,10 @@ int32_t rpcs3_core_initialize(const char* state_root) try
 			Emu.SetSupportedRenderers({video_renderer::null});
 #ifdef RPCS3_UWP_MESA
 			Emu.SetSupportedRenderers({video_renderer::null, video_renderer::opengl});
-#endif
+			Emu.SetDefaultRenderer(video_renderer::opengl);
+#else
 			Emu.SetDefaultRenderer(video_renderer::null);
+#endif
 			Emu.SetUsr("00000001");
 			Emu.Init();
 			normalize_host_settings();
@@ -730,6 +736,84 @@ int32_t rpcs3_core_log_path(char* output, uint32_t capacity, uint32_t* required)
 catch (...) { return RPCS3_CORE_INTERNAL_ERROR; }
 
 uint32_t rpcs3_core_state() { return s_state.load(); }
+
+static int32_t enumerate_games(const char* root, rpcs3_core_game_callback callback, void* user) try
+{
+	if (!root || !callback) return RPCS3_CORE_INVALID_ARGUMENT;
+	if (!s_initialized || s_closing) return RPCS3_CORE_NOT_INITIALIZED;
+	if (s_state != 0) return RPCS3_CORE_BUSY;
+	game_enumeration<GameInfo> scan;
+	scan.set_localization(static_cast<s32>(g_cfg.sys.language.get()), "Unknown",
+		[](const std::string& title) { return title; });
+	scan.initialize_paths();
+	scan.parse_directories();
+	scan.add_vfs_entry();
+	scan.remove_duplicates();
+	for (const auto& entry : scan.path_entries())
+		if ((!entry.path.starts_with("/vfsv0_") || (*root && entry.path.starts_with(root))) &&
+			(fs::is_dir(entry.path) || fs::is_file(entry.path))) scan.parse_entry(entry);
+	if (*root)
+	{
+		if (!fs::is_dir(root)) return RPCS3_CORE_IO_ERROR;
+		if (fs::is_file(std::string(root) + "/PARAM.SFO") || fs::is_file(std::string(root) + "/PS3_DISC.SFB"))
+			scan.parse_entry({root, true});
+		else for (const auto& entry : fs::dir(root))
+		{
+			if (entry.name == "." || entry.name == "..") continue;
+			scan.parse_entry({std::string(root) + "/" + entry.name, true});
+		}
+	}
+	scan.apply_patches();
+	scan.remove_duplicates();
+	for (const auto& game : scan.games())
+	{
+		fs::stat_t stat{};
+		const u64 size = game.is_iso_file ? (fs::get_stat(game.path, stat) ? stat.size : 0) : fs::get_dir_size(game.path);
+		std::vector<char> icon;
+		fs::file file;
+		if (game.icon_in_archive)
+		{
+			iso_archive archive(game.path);
+			if (archive.is_valid()) file = fs::file(archive.open(game.icon_path));
+		}
+		else file.open(game.icon_path);
+		if (file && file.size() && file.size() <= 16 * 1024 * 1024)
+		{
+			icon.resize(file.size());
+			if (file.read(icon.data(), icon.size()) != icon.size()) icon.clear();
+		}
+		const rpcs3_core_game_info info{sizeof(rpcs3_core_game_info), game.path.c_str(),
+			game.name.c_str(), game.serial.c_str(), game.app_ver.c_str(), game.version.c_str(),
+			game.category.c_str(), game.fw.c_str(), game.icon_path.c_str(), game.movie_path.c_str(),
+			game.audio_path.c_str(), game.game_dir.c_str(), game.attr, game.bootable, game.parental_lvl,
+			game.resolution, game.sound_format, game.is_iso_file, game.has_custom_icon,
+			icon.data(), static_cast<uint32_t>(icon.size()),
+			size,
+			fs::is_file(rpcs3::utils::get_custom_config_path(game.serial)),
+			fs::is_file(rpcs3::utils::get_custom_input_config_path(game.serial))};
+		callback(user, &info);
+	}
+	return RPCS3_CORE_OK;
+}
+catch (...) { return RPCS3_CORE_INTERNAL_ERROR; }
+
+int32_t rpcs3_core_enumerate_games(const char* root, rpcs3_core_game_callback callback, void* user) try
+{
+	if (!root || !callback) return RPCS3_CORE_INVALID_ARGUMENT;
+	auto host = runtime();
+	if (!host || !s_initialized) return RPCS3_CORE_NOT_INITIALIZED;
+	if (host->is_owner()) return RPCS3_CORE_WRONG_THREAD;
+	auto completion = std::make_shared<std::promise<int32_t>>();
+	auto future = completion->get_future();
+	const auto result = host->submit(RPCS3_CORE_COMMAND_ENUMERATE_GAMES,
+		[root = std::string(root), callback, user, completion] {
+			const auto status = enumerate_games(root.c_str(), callback, user);
+			completion->set_value(status);
+			return status;
+		});
+	return result == RPCS3_CORE_OK ? future.get() : result;
+}
+catch (...) { return RPCS3_CORE_INTERNAL_ERROR; }
 
 int32_t rpcs3_core_enumerate_config(rpcs3_core_config_callback callback, void* user) try
 {

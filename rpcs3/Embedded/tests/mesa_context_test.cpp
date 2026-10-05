@@ -58,7 +58,40 @@ int main(int argc, char** argv)
     bool success = renderer.find("D3D12") != std::string::npos &&
         pixel[0] >= 63 && pixel[0] <= 65 && pixel[1] >= 127 && pixel[1] <= 129 &&
         pixel[2] >= 190 && pixel[2] <= 192 && pixel[3] == 255;
+    // Exercise the GLSL parser involved in the cached-shader startup crash.
+    // This is still a native driver probe, not a guest/cache replay test.
+    const auto create_shader = reinterpret_cast<GLuint (APIENTRY*)(GLenum)>(proc("glCreateShader"));
+    const auto shader_source = reinterpret_cast<void (APIENTRY*)(GLuint, GLsizei, const char* const*, const GLint*)>(proc("glShaderSource"));
+    const auto compile_shader = reinterpret_cast<void (APIENTRY*)(GLuint)>(proc("glCompileShader"));
+    const auto shader_status = reinterpret_cast<void (APIENTRY*)(GLuint, GLenum, GLint*)>(proc("glGetShaderiv"));
+    const auto shader_log = reinterpret_cast<void (APIENTRY*)(GLuint, GLsizei, GLsizei*, char*)>(proc("glGetShaderInfoLog"));
+    const auto delete_shader = reinterpret_cast<void (APIENTRY*)(GLuint)>(proc("glDeleteShader"));
+    if (!create_shader || !shader_source || !compile_shader || !shader_status || !shader_log || !delete_shader)
+        success = false;
+    else
+    {
+        const char* sources[] = {
+            "#version 430 core\nvoid main(){ gl_Position=vec4(0.0,0.0,0.0,1.0); }\n",
+            "#version 430 core\nlayout(location=0) out vec4 color; void main(){ color=vec4(0.25,0.5,0.75,1.0); }\n"
+        };
+        for (int i = 0; i < 2; ++i)
+        {
+            const auto shader = create_shader(i == 0 ? 0x8b31 : 0x8b30);
+            shader_source(shader, 1, &sources[i], nullptr);
+            compile_shader(shader);
+            GLint compiled = 0;
+            shader_status(shader, 0x8b81, &compiled);
+            if (!compiled)
+            {
+                char message[4096]{};
+                shader_log(shader, sizeof(message), nullptr, message);
+                std::cerr << "GLSL compilation failed: " << message << '\n';
+                success = false;
+            }
+            delete_shader(shader);
+        }
+    }
     bind(nullptr, nullptr); destroy(context);
-    std::cout << (success ? "PASS" : "FAIL") << " OpenGL 4.3 Gallium D3D12 clear/readback\n";
+    std::cout << (success ? "PASS" : "FAIL") << " OpenGL 4.3 Gallium D3D12 clear/readback and GLSL compilation\n";
     return success ? 0 : 9;
 }

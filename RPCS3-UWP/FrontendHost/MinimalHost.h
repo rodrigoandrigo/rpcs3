@@ -4,6 +4,7 @@
 #include "UwpImGuiFrontend/UwpImGuiFrontend.h"
 
 #include <array>
+#include <chrono>
 #include <atomic>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Core.h>
@@ -138,6 +139,9 @@ private:
 	std::function<void(TextureHandle)> m_releaseTexture;
 	DsuEndpoint m_endpoint;
 	RunningContent m_runningContent;
+	std::chrono::steady_clock::time_point m_gameStarted{};
+	std::string m_playingSerial;
+	void SavePlayHistory();
 #ifdef RPCS3_HOST_WITH_CORE
 	std::optional<RunningContent> m_pendingCoreLaunch;
 #endif

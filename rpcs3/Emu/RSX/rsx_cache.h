@@ -273,7 +273,11 @@ namespace rsx
 			dlg->update_msg(1, get_message(1, 0, entry_count));
 
 			// Preload everything needed to compile the shaders
-			unpacked_type unpacked;
+			// The inline FIFO holds 1000 program tuples (almost 1 MiB on x64).
+			// Keep it off the renderer's stack: Mesa's GLSL parser needs additional
+			// stack while compile_shaders runs with this FIFO still alive.
+			const auto unpacked_storage = std::make_unique<unpacked_type>();
+			auto& unpacked = *unpacked_storage;
 			uint nb_workers = g_cfg.video.renderer == video_renderer::vulkan ? utils::get_thread_count() : 1;
 
 			load_shaders(nb_workers, unpacked, directory_path, entries, entry_count, dlg);

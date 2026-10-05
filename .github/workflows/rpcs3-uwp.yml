@@ -1,0 +1,108 @@
+name: Build and sign RPCS3-UWP
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    tags: ['uwp-v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpcs3-uwp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check signing configuration
+        env:
+          PFX_BASE64: ${{ secrets.UWP_SIGNING_PFX_BASE64 }}
+        run: |
+          if (-not $env:PFX_BASE64) { throw 'Set the UWP_SIGNING_PFX_BASE64 repository secret before running this workflow.' }
+
+      - name: Preserve Unix line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Restore pinned submodules except unused LLVM and SDL
+        run: |
+          $modules = @(git ls-files --stage | Where-Object { $_ -match '^160000 ' } | ForEach-Object { ($_ -split "`t", 2)[1] } | Where-Object { $_ -notin @('3rdparty/llvm/llvm', '3rdparty/libsdl-org/SDL') })
+          if ($modules.Count) {
+            git submodule update --init --recursive --depth 1 -- @modules
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+
+      - name: Checkout SDL3_UWP
+        uses: actions/checkout@v4
+        with:
+          repository: rodrigoandrigo/SDL3_UWP
+          ref: main
+          path: .ci/SDL3_UWP
+          persist-credentials: false
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          location: 'C:\'
+          path-type: inherit
+          install: >-
+            make bison flex git diffutils patch pkgconf
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Mesa build dependencies
+        run: python -m pip install meson==1.12.1 Mako==1.3.10 PyYAML==6.0.3 packaging==25.0
+
+      - name: Prepare UWP build environment
+        run: ./RPCS3-UWP/Prepare-CI.ps1
+
+      - name: Build UWP FFmpeg
+        run: ./RPCS3-UWP/Build-Ffmpeg.ps1 -Jobs 4
+
+      - name: Build embedded Mesa Gallium D3D12
+        run: ./RPCS3-UWP/Build-Mesa.ps1 -Jobs 4
+
+      - name: Build Qt-free RPCS3 DLL
+        run: ./RPCS3-UWP/Build-Core.ps1 -Configuration Release -MesaOpenGL -ExperimentalD3D12
+
+      - name: Build frontend and package
+        run: ./RPCS3-UWP/Build-Host.ps1 -Configuration Release -MesaOpenGL
+
+      - name: Audit UWP imports
+        run: |
+          $dlls = @('build-uwp-msvc/core/bin/rpcs3-core.dll', 'build-uwp-msvc/mesa/src/gallium/targets/wgl/gallium_wgl.dll', 'build-uwp-msvc/mesa/src/gallium/targets/libgl-gdi/opengl32.dll', 'build-uwp-msvc/mesa/src/gallium/targets/libgl-gdi/dxil.dll')
+          ./RPCS3-UWP/Audit-Uwp.ps1 -Dll $dlls[0] -PackageDlls $dlls -PackageManifest RPCS3-UWP/FrontendHost/UWP-App/Package.appxmanifest
+
+      - name: Sign and verify package
+        env:
+          UWP_SIGNING_PFX_BASE64: ${{ secrets.UWP_SIGNING_PFX_BASE64 }}
+          UWP_SIGNING_PFX_PASSWORD: ${{ secrets.UWP_SIGNING_PFX_PASSWORD }}
+        run: ./RPCS3-UWP/Sign-CI-Package.ps1
+
+      - name: Upload signed package, public certificate and audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: RPCS3-UWP-x64-${{ github.run_number }}
+          path: build-uwp-msvc/ci-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary private certificate
+        if: always()
+        run: |
+          $key = Join-Path $env:RUNNER_TEMP 'rpcs3-uwp-signing.pfx'
+          if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Force }

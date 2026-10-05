@@ -7,6 +7,8 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Foundation.h>
 
 // Run against a freshly built DLL and an isolated writable state directory.
 // This checks configuration behavior, not AppContainer or guest execution.
@@ -25,8 +27,8 @@ struct events
 
 int main(int argc, char** argv)
 {
-    if (argc != 3 && argc != 4) return 2;
-    if (argc == 4) AddDllDirectory(std::filesystem::absolute(argv[3]).c_str());
+    if (argc < 3 || argc > 5) return 2;
+    if (argc >= 4) AddDllDirectory(std::filesystem::absolute(argv[3]).c_str());
     const auto dllPath = std::filesystem::absolute(argv[1]);
     const auto statePath = std::filesystem::absolute(argv[2]);
     if (std::filesystem::exists(statePath)) {
@@ -41,6 +43,8 @@ int main(int argc, char** argv)
     API(rpcs3_core_enumerate_config); API(rpcs3_core_set_config);
     API(rpcs3_core_reset_config); API(rpcs3_core_save_settings);
     API(rpcs3_core_shutdown); API(rpcs3_core_release);
+    API(rpcs3_core_enumerate_games);
+    API(rpcs3_core_mount_storage); API(rpcs3_core_unmount_storage);
     events state;
     const rpcs3_core_callbacks callbacks{sizeof(callbacks), 2, &state, nullptr,
         [](void* user, unsigned type, unsigned command, int result, const char* message) {
@@ -76,6 +80,32 @@ int main(int argc, char** argv)
         std::cout << (ok ? "PASS " : "FAIL ") << label << '\n'; failures += !ok;
     };
     check(snapshot() == 0 && entries.size() > 200, "complete configuration snapshot");
+    check(rpcs3_core_enumerate_games(nullptr, [](void*, const rpcs3_core_game_info*) {}, nullptr)
+        == RPCS3_CORE_INVALID_ARGUMENT, "reject invalid library scan");
+    if (argc == 5) {
+        struct game_result { unsigned count = 0; bool valid = false; } games;
+        const auto collect = [](void* opaque, const rpcs3_core_game_info* info) {
+            auto& result = *static_cast<game_result*>(opaque);
+            ++result.count;
+            if (std::string(info->serial) == "NPUB30304") result.valid =
+                std::string(info->name) != "NPUB30304" && std::string(info->category) == "HG" &&
+                info->icon_size > 8 && info->icon_data && std::string(info->firmware) != "Unknown";
+            std::cout << "GAME " << info->serial << " | " << info->name << " | " << info->app_version
+                << " | " << info->category << " | icon=" << info->icon_size << '\n';
+        };
+        check(rpcs3_core_enumerate_games(argv[4], collect, &games) == 0 && games.valid,
+            "upstream PARAM.SFO metadata and icon without booting guest");
+        winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        const auto folder = winrt::Windows::Storage::StorageFolder::GetFolderFromPathAsync(winrt::to_hstring(argv[4])).get();
+        char root[256]{}; uint32_t required = 0;
+        const auto mounted = rpcs3_core_mount_storage(RPCS3_CORE_STORAGE_FOLDER, winrt::get_abi(folder),
+            "metadata-test", 0, root, sizeof(root), &required);
+        games = {};
+        check(mounted == 0 && rpcs3_core_enumerate_games(root, collect, &games) == 0 && games.valid,
+            "broker-mounted StorageFolder PARAM.SFO and icon");
+        check(rpcs3_core_unmount_storage("metadata-test") == 0, "release library broker mount");
+        winrt::uninit_apartment();
+    }
     for (const auto& [path, e] : entries) {
         if (e.group.empty() || (e.type == RPCS3_CORE_CONFIG_ENUM && e.choices.empty()) ||
             ((e.flags & RPCS3_CORE_CONFIG_READ_ONLY) && e.restriction.empty())) {
@@ -112,6 +142,7 @@ int main(int argc, char** argv)
     check(set("Log", "{SYS: InvalidLevel}") == RPCS3_CORE_INVALID_ARGUMENT, "reject invalid log level");
     check(set("Audio/Renderer", "Cubeb") == RPCS3_CORE_UNSUPPORTED_RENDERER, "reject unavailable backend");
     if (entries.at("Video/Renderer").choices.find("Mesa Gallium D3D12") != std::string::npos) {
+        check(entries.at("Video/Renderer").defaults == "OpenGL (Mesa Gallium D3D12)", "OpenGL default renderer");
         check(entries.at("Video/Renderer").choices == "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)",
             "D3D12 first and Mesa OpenGL second");
         check(set("Video/Renderer", "OpenGL (Mesa Gallium D3D12)") == 0, "select Mesa OpenGL");
@@ -131,6 +162,8 @@ int main(int argc, char** argv)
     prepare(RPCS3_CORE_COMMAND_RESET_CONFIG);
     check(rpcs3_core_reset_config("") == 0 && wait() == 0, "reset whole tree");
     snapshot();
+    if (entries.at("Video/Renderer").choices.find("Mesa Gallium D3D12") != std::string::npos)
+        check(entries.at("Video/Renderer").value == "OpenGL (Mesa Gallium D3D12)", "reset selects OpenGL");
     check(entries.at("Audio/Renderer").value == entries.at("Audio/Renderer").defaults &&
         entries.at("Input/Output/Mouse").value == entries.at("Input/Output/Mouse").defaults,
         "reset preserves UWP backend policy");

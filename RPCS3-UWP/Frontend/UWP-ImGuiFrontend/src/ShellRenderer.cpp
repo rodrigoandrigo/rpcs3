@@ -305,6 +305,7 @@ public:
 
 	std::string SerialFor(const LibraryItem& item) const
 	{
+		if (!item.serial.empty()) return item.serial;
 		char serial[24]{};
 		if (item.contentId)
 			std::snprintf(serial, sizeof(serial), "%08llX",
@@ -312,13 +313,27 @@ public:
 		return item.contentId ? serial : "Unknown";
 	}
 
-	void DrawDesktopList(Frontend& frontend)
+	const char* CategoryFor(const LibraryItem& item) const
+	{
+		const std::pair<const char*, const char*> categories[]{
+			{"AM", "Music App"}, {"AP", "Photo App"}, {"AS", "Store App"}, {"AT", "TV App"},
+			{"AV", "Video App"}, {"BV", "Broadcast Video"}, {"WT", "Web TV"}, {"HM", "Home"},
+			{"CB", "Network"}, {"SF", "Store"}, {"DG", "Disc Game"}, {"HG", "HDD Game"},
+			{"2P", "PS2 Classics"}, {"2G", "PS2 Game"}, {"1P", "PS1 Classics"}, {"PP", "PSP Game"},
+			{"MN", "PSP Minis"}, {"PE", "PSP Remasters"}, {"GD", "PS3 Game Data"},
+			{"2D", "PS2 Emulator Data"}, {"SD", "PS3 Save Data"}, {"MS", "PSP Minis Save Data"},
+			{"/OS", "Operating System"}};
+		for (const auto& [code, label] : categories) if (item.category == code) return label;
+		return item.category.empty() ? "Unknown" : item.category.c_str();
+	}
+
+	void DrawDesktopList(Frontend& frontend, const ShellPresentation& presentation)
 	{
 		constexpr ImGuiTableFlags tableFlags = ImGuiTableFlags_RowBg |
 			ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuterH |
 			ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
 			ImGuiTableFlags_SizingStretchProp;
-		if (!ImGui::BeginTable("##rpcs3-game-list", 10, tableFlags))
+		if (!ImGui::BeginTable("##rpcs3-game-list", 11, tableFlags))
 			return;
 		ImGui::TableSetupScrollFreeze(0, 1);
 		ImGui::TableSetupColumn("Icon", ImGuiTableColumnFlags_WidthFixed, 54.0f);
@@ -331,6 +346,7 @@ public:
 		ImGui::TableSetupColumn("Last Played");
 		ImGui::TableSetupColumn("Time Played");
 		ImGui::TableSetupColumn("Compatibility");
+		ImGui::TableSetupColumn("Space On Disk");
 		ImGui::TableHeadersRow();
 		for (std::size_t index = 0; index < frontend.Catalogue().size(); ++index)
 		{
@@ -340,6 +356,7 @@ public:
 				continue;
 			ImGui::TableNextRow(ImGuiTableRowFlags_None, std::max(34.0f, m_desktopIconSize));
 			ImGui::TableSetColumnIndex(0);
+			const auto iconPosition = ImGui::GetCursorScreenPos();
 			const bool selected = frontend.State().SelectedIndex() == index;
 			ImGui::PushID(static_cast<int>(index));
 			if (ImGui::Selectable("##game", selected,
@@ -355,15 +372,35 @@ public:
 				frontend.OpenContextMenu();
 			}
 			ImGui::PopID();
+			if (const auto texture = PreferredArtwork(item, presentation))
+				ImGui::GetWindowDrawList()->AddImage(TextureReference(texture.id), iconPosition,
+					{iconPosition.x + m_desktopIconSize, iconPosition.y + m_desktopIconSize});
 			ImGui::TableSetColumnIndex(1); ImGui::TextUnformatted(item.name.c_str());
+			if (ImGui::IsItemHovered()) {
+				ImGui::BeginTooltip();
+				ImGui::Text("Firmware: %s | Parental level: %u", item.firmware.c_str(), item.parentalLevel);
+				ImGui::Text("Category: %s | Revision: %s | Bootable: %u", item.category.c_str(), item.revision.c_str(), item.bootable);
+				ImGui::Text("Sound formats: 0x%X | Attributes: 0x%X", item.soundFormats, item.attributes);
+				ImGui::Text("Custom configuration: %s | Custom pads: %s", item.customConfig ? "Yes" : "No", item.customPadConfig ? "Yes" : "No");
+				ImGui::Text("Compatibility date: %s | Latest update: %s", item.compatibilityDate.c_str(), item.latestVersion.c_str());
+				ImGui::EndTooltip();
+			}
 			ImGui::TableSetColumnIndex(2); ImGui::TextUnformatted(SerialFor(item).c_str());
-			ImGui::TableSetColumnIndex(3); ImGui::Text("%u", item.version);
-			ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(item.platform.empty() ? item.format.c_str() : item.platform.c_str());
-			ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted("Unknown");
-			ImGui::TableSetColumnIndex(6); ImGui::TextUnformatted("Unknown");
-			ImGui::TableSetColumnIndex(7); ImGui::TextUnformatted("Never played");
-			ImGui::TableSetColumnIndex(8); ImGui::TextUnformatted("0:00:00");
-			ImGui::TableSetColumnIndex(9); ImGui::TextUnformatted("No results found");
+			ImGui::TableSetColumnIndex(3); ImGui::TextUnformatted(
+				(item.appVersion.empty() || item.appVersion == "Unknown" ? item.revision : item.appVersion).c_str());
+			ImGui::TableSetColumnIndex(4); ImGui::TextUnformatted(CategoryFor(item));
+			ImGui::TableSetColumnIndex(5); ImGui::TextUnformatted(item.attributes & 0x800000 ? "Supported" : "Not Supported");
+			std::string resolutions;
+			const char* labels[]{"480", "576", "720", "1080", "480 16:9", "576 16:9"};
+			for (unsigned bit = 0; bit < 6; ++bit) if (item.resolutions & (1u << bit)) {
+				if (!resolutions.empty()) resolutions += ", "; resolutions += labels[bit];
+			}
+			ImGui::TableSetColumnIndex(6); ImGui::TextUnformatted(resolutions.empty() ? "Unknown" : resolutions.c_str());
+			ImGui::TableSetColumnIndex(7); ImGui::TextUnformatted(item.lastPlayed.empty() ? "Never played" : item.lastPlayed.c_str());
+			ImGui::TableSetColumnIndex(8); ImGui::Text("%llu:%02llu:%02llu",
+				item.playTimeSeconds / 3600, (item.playTimeSeconds / 60) % 60, item.playTimeSeconds % 60);
+			ImGui::TableSetColumnIndex(9); ImGui::TextUnformatted(item.compatibility.empty() ? "No results found" : item.compatibility.c_str());
+			ImGui::TableSetColumnIndex(10); ImGui::Text("%.2f GiB", static_cast<double>(item.sizeOnDisk) / (1024 * 1024 * 1024));
 		}
 		ImGui::EndTable();
 	}
@@ -425,7 +462,7 @@ public:
 			if (ImGui::Button("Add games folder", { 170.0f, 40.0f })) m_host.Execute(HostCommand::AddContent);
 		}
 		else if (m_desktopGrid) DrawDesktopGrid(frontend, presentation);
-		else DrawDesktopList(frontend);
+		else DrawDesktopList(frontend, presentation);
 		ImGui::EndChild();
 		if (m_showDesktopLog)
 		{

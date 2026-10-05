@@ -188,7 +188,7 @@ error_code _sys_lwmutex_lock(ppu_thread& ppu, u32 lwmutex_id, u64 timeout)
 			return { CELL_ESRCH, lwmutex_id };
 		}
 
-		return { CELL_ESRCH, "Invalid ID" };
+		return { CELL_ESRCH, lwmutex_id };
 	}
 
 	if (mutex.ret)

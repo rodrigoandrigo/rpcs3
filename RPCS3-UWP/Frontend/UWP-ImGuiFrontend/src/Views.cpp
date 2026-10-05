@@ -848,7 +848,6 @@ DataTableResult DrawDataTable(const char* id, DataTableState& state,
 	clipper.Begin(static_cast<int>(rows.size()), options.rowHeight);
 	const auto& theme = CurrentWidgetTheme();
 	std::optional<std::size_t> focusedIndex;
-	std::optional<std::size_t> hoveredIndex;
 	while (clipper.Step())
 	{
 		for (int rowIndex = clipper.DisplayStart; rowIndex < clipper.DisplayEnd; ++rowIndex)
@@ -881,8 +880,6 @@ DataTableResult DrawDataTable(const char* id, DataTableState& state,
 			result.rowFocused |= focused;
 			if (focused)
 				focusedIndex = static_cast<std::size_t>(rowIndex);
-			if (hovered)
-				hoveredIndex = static_cast<std::size_t>(rowIndex);
 			if (!row.enabled)
 				ImGui::EndDisabled();
 			ImGui::PopID();
@@ -1006,7 +1003,7 @@ DataTableResult DrawDataTable(const char* id, DataTableState& state,
 	// Pending focus transfers ignore stale focus and pointer hover.
 	std::optional<std::size_t> interactionIndex;
 	if (!focusRequested)
-		interactionIndex = focusedIndex ? focusedIndex : hoveredIndex;
+		interactionIndex = focusedIndex; // Pointer hover highlights only; it never selects a game.
 	if (interactionIndex && state.selected != *interactionIndex)
 	{
 		state.selected = *interactionIndex;

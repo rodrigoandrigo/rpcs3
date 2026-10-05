@@ -4,7 +4,8 @@ param(
     [switch]$ConfigureOnly,
     [switch]$ExperimentalD3D12,
     [switch]$MesaOpenGL,
-    [string]$FfmpegRoot
+    [string]$FfmpegRoot,
+    [string]$SdlSource = $env:RPCS3_SDL3_SOURCE_DIR
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Enter-MsvcEnvironment.ps1')
@@ -16,6 +17,8 @@ New-Item -ItemType Directory -Path $emptyPkgConfig -Force | Out-Null
 $env:PKG_CONFIG_LIBDIR = $emptyPkgConfig
 $env:PKG_CONFIG_PATH = $emptyPkgConfig
 if (-not $FfmpegRoot) { $FfmpegRoot = Join-Path $repositoryRoot 'build-uwp-msvc\ffmpeg-uwp' }
+if (-not $SdlSource) { $SdlSource = 'C:\Users\rodri\Dev1\Projetos\SDL3-uwp' }
+if (-not (Test-Path (Join-Path $SdlSource 'CMakeLists.txt'))) { throw "SDL3_UWP source missing: $SdlSource" }
 $d3d12Option = if ($ExperimentalD3D12) { 'ON' } else { 'OFF' }
 $mesaOption = if ($MesaOpenGL) { 'ON' } else { 'OFF' }
 if ($MesaOpenGL) { $d3d12Option = 'ON' }
@@ -29,7 +32,7 @@ if ($MesaOpenGL) { $d3d12Option = 'ON' }
     '-DUSE_LTO=OFF' '-DUSE_NATIVE_INSTRUCTIONS=OFF' '-DUSE_FAUDIO=OFF' `
     '-DUSE_SYSTEM_ZLIB=OFF' '-DUSE_SYSTEM_CURL=OFF' '-DUSE_SYSTEM_LIBUSB=OFF' `
     '-DUSE_LIBEVDEV=OFF' '-DUSE_SDL=ON' '-DUSE_SYSTEM_SDL=OFF' `
-    '-DRPCS3_SDL3_SOURCE_DIR=C:/Users/rodri/Dev1/Projetos/SDL3-uwp' `
+    "-DRPCS3_SDL3_SOURCE_DIR=$SdlSource" `
     '-DSDL_SHARED=OFF' '-DSDL_STATIC=ON' '-DSDL_TESTS=OFF' `
     '-DSDL_HIDAPI_LIBUSB=OFF' '-DSDL_VULKAN=OFF' '-DSDL_RENDER_VULKAN=OFF' `
     '-DSDL_OPENGL=OFF' '-DSDL_OPENGLES=OFF' '-DSDL_CEMU_UWP=ON' `
