@@ -58,6 +58,9 @@ jobs:
         with:
           msystem: UCRT64
           location: 'C:\'
+          # Hosted Windows runners already provide C:\msys64.
+          # Reuse it instead of attempting a fresh installation over it.
+          release: false
           path-type: inherit
           install: >-
             make bison flex git diffutils patch pkgconf
