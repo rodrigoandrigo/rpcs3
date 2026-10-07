@@ -131,6 +131,10 @@ struct dxil_spirv_vertex_runtime_data {
     * primitives when emulating triangle point fill mode. Slope-scaled
     * depth bias is currently unsupported. */
    float depth_bias;
+   /* Dozen's implicit point-fill geometry shader dynamic raster state. */
+   uint32_t point_cull_mode;
+   uint32_t point_front_ccw;
+   uint32_t point_depth_bias_enable;
 };
 
 enum dxil_spirv_yz_flip_mode {

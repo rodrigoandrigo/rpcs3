@@ -225,6 +225,7 @@ struct dzn_physical_device {
    D3D12_HEAP_FLAGS heap_flags_for_mem_type[VK_MAX_MEMORY_TYPES];
    const struct vk_sync_type *sync_types[MAX_SYNC_TYPES + 1];
    float timestamp_period;
+   bool calibrated_timestamps;
    bool support_a4b4g4r4;
 };
 
@@ -282,6 +283,7 @@ struct dzn_device {
    struct vk_device vk;
    struct vk_device_extension_table enabled_extensions;
    struct vk_device_dispatch_table cmd_dispatch;
+   uint64_t memory_report_next_id;
 
    ID3D12Device4 *dev;
    ID3D12Device10 *dev10;
@@ -337,8 +339,11 @@ struct dzn_device_memory {
 
    ID3D12Heap *heap;
    VkDeviceSize size;
+   uint64_t memory_report_id;
    uint32_t heap_index;
    bool budget_accounted;
+   bool imported;
+   bool address_binding_reported;
 
    /* A buffer-resource spanning the entire heap, used for mapping memory */
    ID3D12Resource *map_res;
@@ -396,6 +401,7 @@ enum dzn_cmd_dirty {
 #define MAX_VP D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
 #define MAX_SCISSOR D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
 #define MAX_SETS 8
+#define DZN_MAX_PUSH_DESCRIPTORS 32
 #define MAX_DYNAMIC_UNIFORM_BUFFERS 8
 #define MAX_DYNAMIC_STORAGE_BUFFERS 4
 #define MAX_DYNAMIC_BUFFERS                                                  \
@@ -419,6 +425,8 @@ struct dzn_cmd_buffer;
 struct dzn_descriptor_state {
    struct {
       const struct dzn_descriptor_set *set;
+      bool push_descriptor;
+      const struct dzn_pipeline_layout *pipeline_layout;
       uint32_t dynamic_offsets[MAX_DYNAMIC_BUFFERS];
    } sets[MAX_SETS];
    struct dzn_descriptor_heap *heaps[NUM_POOL_TYPES];
@@ -568,8 +576,48 @@ struct dzn_rendering_attachment {
    VkAttachmentStoreOp store_op;
 };
 
+enum dzn_extended_dynamic_state {
+   DZN_DYNAMIC_CULL = 1 << 0,
+   DZN_DYNAMIC_FRONT_FACE = 1 << 1,
+   DZN_DYNAMIC_TOPOLOGY = 1 << 2,
+   DZN_DYNAMIC_DEPTH_TEST = 1 << 3,
+   DZN_DYNAMIC_DEPTH_WRITE = 1 << 4,
+   DZN_DYNAMIC_DEPTH_COMPARE = 1 << 5,
+   DZN_DYNAMIC_DEPTH_BOUNDS_TEST = 1 << 6,
+   DZN_DYNAMIC_STENCIL_TEST = 1 << 7,
+   DZN_DYNAMIC_STENCIL_OP = 1 << 8,
+   DZN_DYNAMIC_DISCARD = 1 << 9,
+   DZN_DYNAMIC_DEPTH_BIAS_ENABLE = 1 << 10,
+   DZN_DYNAMIC_RESTART = 1 << 11,
+   DZN_DYNAMIC_VERTEX_INPUT = 1 << 12,
+   DZN_DYNAMIC_VERTEX_STRIDE = 1 << 13,
+};
+
+struct dzn_extended_state {
+   VkCullModeFlags cull_mode;
+   VkFrontFace front_face;
+   VkPrimitiveTopology topology;
+   uint32_t depth_test, depth_write, depth_bounds_test, stencil_test;
+   uint32_t discard, depth_bias_enable, restart;
+   VkCompareOp depth_compare;
+   struct {
+      VkStencilOp fail, pass, depth_fail;
+      VkCompareOp compare;
+   } stencil[2];
+   struct {
+      uint32_t binding, offset;
+      VkFormat format;
+   } attributes[MAX_VERTEX_GENERIC_ATTRIBS];
+   struct {
+      VkVertexInputRate rate;
+      uint32_t divisor;
+   } bindings[MAX_VBS];
+};
+
 struct dzn_graphics_pipeline_variant_key {
    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE ib_strip_cut;
+   uint8_t color_write_enables;
+   struct dzn_extended_state extended;
    struct {
       int constant_factor;
       float slope_factor;
@@ -591,6 +639,7 @@ struct dzn_graphics_pipeline_variant {
 
 struct dzn_cmd_buffer_state {
    const struct dzn_pipeline *pipeline;
+   ID3D12PipelineState *pipeline_state;
    struct dzn_descriptor_heap *heaps[NUM_POOL_TYPES];
    struct dzn_graphics_pipeline_variant_key pipeline_variant;
    struct {
@@ -626,6 +675,7 @@ struct dzn_cmd_buffer_state {
    } blend;
    D3D12_VIEWPORT viewports[MAX_VP];
    D3D12_RECT scissors[MAX_SCISSOR];
+   uint32_t viewport_count, scissor_count;
    struct {
       struct dzn_cmd_buffer_push_constant_state gfx, compute;
    } push_constant;
@@ -674,7 +724,11 @@ enum dzn_internal_buf_bucket {
 
 struct dzn_cmd_buffer {
    struct vk_command_buffer vk;
+   struct vk_vertex_input_state dynamic_vi;
    struct dzn_cmd_buffer_state state;
+
+   /* Push descriptor updates are snapshots and remain alive through execution. */
+   struct util_dynarray push_descriptor_pools;
 
    struct {
       struct hash_table *ht;
@@ -704,6 +758,7 @@ struct dzn_cmd_buffer {
 
    ID3D12CommandAllocator *cmdalloc;
    ID3D12GraphicsCommandList1 *cmdlist;
+   ID3D12GraphicsCommandList2 *cmdlist2;
    ID3D12GraphicsCommandList8 *cmdlist8;
    ID3D12GraphicsCommandList9 *cmdlist9;
 
@@ -738,6 +793,7 @@ struct dzn_descriptor_pool {
 
 struct dzn_descriptor_set_layout_binding {
    VkDescriptorType type;
+   uint32_t descriptor_count;
    uint32_t stages;
    D3D12_SHADER_VISIBILITY visibility;
    uint32_t base_shader_register;
@@ -843,6 +899,7 @@ struct dzn_pipeline_layout {
 
 struct dzn_descriptor_update_template_entry {
    VkDescriptorType type;
+   bool immutable_sampler;
    uint32_t desc_count;
    uint32_t buffer_idx;
    struct {
@@ -859,9 +916,25 @@ struct dzn_descriptor_update_template_entry {
 
 struct dzn_descriptor_update_template {
    struct vk_object_base base;
+   VkDescriptorUpdateTemplateType type;
+   VkPipelineBindPoint bind_point;
+   uint32_t set;
+   struct dzn_pipeline_layout *pipeline_layout;
    uint32_t entry_count;
    const struct dzn_descriptor_update_template_entry *entries;
 };
+
+VkResult
+dzn_descriptor_set_push_allocate(struct dzn_device *device,
+                                 const struct dzn_descriptor_set_layout *layout,
+                                 const struct dzn_descriptor_set *previous,
+                                 VkDescriptorPool *pool,
+                                 VkDescriptorSet *set);
+void
+dzn_descriptor_set_push_update(struct dzn_device *device,
+                               VkDescriptorSet set,
+                               uint32_t write_count,
+                               const VkWriteDescriptorSet *writes);
 
 enum dzn_register_space {
    DZN_REGISTER_SPACE_SYSVALS = MAX_SETS,
@@ -942,6 +1015,14 @@ struct dzn_indirect_draw_cmd_sig_key {
 
 struct dzn_graphics_pipeline {
    struct dzn_pipeline base;
+   uint32_t extended_dynamic;
+   bool dynamic_viewport_count, dynamic_scissor_count;
+   uint32_t patch_control_points;
+   bool static_depth_test;
+   nir_shader *dynamic_vs;
+   nir_shader_compiler_options dynamic_vs_options;
+   uint32_t input_count;
+   uint32_t input_locations[D3D12_VS_INPUT_REGISTER_COUNT];
    struct {
       unsigned count;
       uint32_t strides[MAX_VBS];
@@ -987,6 +1068,7 @@ struct dzn_graphics_pipeline {
    } zsa;
 
    struct {
+      bool dynamic_color_write_enable;
       bool dynamic_constants;
       float constants[4];
    } blend;
@@ -1007,6 +1089,8 @@ struct dzn_graphics_pipeline {
          uint32_t ib_strip_cut;
          uint32_t rast;
          uint32_t ds;
+         uint32_t blend;
+         uint32_t ps, input_layout, topology;
       } desc_offsets;
       D3D12_INPUT_ELEMENT_DESC inputs[D3D12_VS_INPUT_REGISTER_COUNT];
       struct {
@@ -1016,6 +1100,7 @@ struct dzn_graphics_pipeline {
    } templates;
 
    struct hash_table *variants;
+   mtx_t variants_lock;
 
    ID3D12CommandSignature *indirect_cmd_sigs[DZN_NUM_INDIRECT_DRAW_CMD_SIGS];
    struct hash_table *custom_stride_cmd_sigs;
@@ -1031,6 +1116,9 @@ struct dzn_graphics_pipeline {
 ID3D12PipelineState *
 dzn_graphics_pipeline_get_state(struct dzn_graphics_pipeline *pipeline,
                                 const struct dzn_graphics_pipeline_variant_key *key);
+D3D12_PRIMITIVE_TOPOLOGY
+dzn_graphics_pipeline_topology(const struct dzn_graphics_pipeline *pipeline,
+                               VkPrimitiveTopology topology);
 
 ID3D12CommandSignature *
 dzn_graphics_pipeline_get_indirect_cmd_sig(struct dzn_graphics_pipeline *pipeline,
@@ -1131,6 +1219,7 @@ dzn_image_get_copy_loc(const struct dzn_image *image,
 struct dzn_image_view {
    struct vk_image_view vk;
    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc;
+   float srv_min_lod_clamp;
    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc;
    D3D12_RENDER_TARGET_VIEW_DESC rtv_desc;
    D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc;

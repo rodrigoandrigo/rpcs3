@@ -806,10 +806,26 @@ copy_vars(nir_builder *b, nir_deref_instr *dst, nir_deref_instr *src)
 }
 
 static nir_def *
-load_dynamic_depth_bias(nir_builder *b, struct dzn_nir_point_gs_info *info)
+load_point_runtime_data(nir_builder *b, struct dzn_nir_point_gs_info *info, unsigned offset)
 {
    nir_address_format ubo_format = nir_address_format_32bit_index_offset;
-   unsigned offset = offsetof(struct dxil_spirv_vertex_runtime_data, depth_bias);
+   bool declared = false;
+   nir_foreach_variable_with_modes(var, b->shader, nir_var_mem_ubo) {
+      declared |= var->data.descriptor_set == info->runtime_data_cbv.register_space &&
+                  var->data.binding == info->runtime_data_cbv.base_shader_register;
+   }
+   if (!declared) {
+      const struct glsl_struct_field field = {
+         .type = glsl_array_type(glsl_uint_type(),
+            sizeof(struct dxil_spirv_vertex_runtime_data) / sizeof(uint32_t), 4),
+         .name = "arr",
+      };
+      nir_variable *var = nir_variable_create(b->shader, nir_var_mem_ubo,
+         glsl_struct_type(&field, 1, "runtime_data", false), "runtime_data");
+      var->data.descriptor_set = info->runtime_data_cbv.register_space;
+      var->data.binding = info->runtime_data_cbv.base_shader_register;
+      var->data.how_declared = nir_var_hidden;
+   }
 
    nir_def *index = nir_vulkan_resource_index(
       b, nir_address_format_num_components(ubo_format),
@@ -922,8 +938,21 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
 
    nir_def *cull_pass = nir_imm_true(b);
    nir_def *front_facing;
-   assert(info->cull_mode != VK_CULL_MODE_FRONT_AND_BACK);
-   if (info->cull_mode == VK_CULL_MODE_FRONT_BIT) {
+   if (info->cull_dynamic || info->front_face_dynamic) {
+      nir_def *ccw = info->front_face_dynamic ?
+         nir_ine_imm(b, load_point_runtime_data(b, info,
+            offsetof(struct dxil_spirv_vertex_runtime_data, point_front_ccw)), 0) :
+         nir_imm_bool(b, info->front_ccw);
+      nir_def *front = nir_bcsel(b, ccw, cull_face(b, pos_var, true),
+                                cull_face(b, pos_var, false));
+      nir_def *mode = info->cull_dynamic ? load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, point_cull_mode)) :
+         nir_imm_int(b, info->cull_mode);
+      nir_def *face_bit = nir_bcsel(b, front, nir_imm_int(b, VK_CULL_MODE_FRONT_BIT),
+                                  nir_imm_int(b, VK_CULL_MODE_BACK_BIT));
+      cull_pass = nir_ieq_imm(b, nir_iand(b, mode, face_bit), 0);
+      front_facing = nir_b2i32(b, front);
+   } else if (info->cull_mode == VK_CULL_MODE_FRONT_BIT) {
       cull_pass = cull_face(b, pos_var, info->front_ccw);
       front_facing = nir_b2i32(b, cull_pass);
    } else if (info->cull_mode == VK_CULL_MODE_BACK_BIT) {
@@ -956,12 +985,18 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
       if (in[i] == pos_var && info->depth_bias) {
          nir_def *bias_val;
          if (info->depth_bias_dynamic) {
-            bias_val = load_dynamic_depth_bias(b, info);
+            bias_val = load_point_runtime_data(b, info,
+               offsetof(struct dxil_spirv_vertex_runtime_data, depth_bias));
          } else {
             assert(info->slope_scaled_depth_bias == 0.0f);
             bias_val = nir_imm_float(b, info->constant_depth_bias);
          }
          bias_val = nir_fmul(b, bias_val, depth_bias_scale);
+         if (info->depth_bias_enable_dynamic) {
+            nir_def *enabled = nir_ine_imm(b, load_point_runtime_data(b, info,
+               offsetof(struct dxil_spirv_vertex_runtime_data, point_depth_bias_enable)), 0);
+            bias_val = nir_bcsel(b, enabled, bias_val, nir_imm_float(b, 0.0f));
+         }
          nir_def *old_val = nir_load_deref(b, in_value);
          nir_def *new_val = nir_vector_insert_imm(b, old_val,
                                                       nir_fadd(b, nir_channel(b, old_val, 2), bias_val),

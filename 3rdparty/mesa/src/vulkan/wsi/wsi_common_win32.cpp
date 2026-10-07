@@ -22,6 +22,7 @@
  */
 
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -38,6 +39,9 @@
 #include "wsi_common_private.h"
 
 #include <dxgi1_4.h>
+#ifndef _XBOX_UWP
+#include <dxgi1_5.h>
+#endif
 #include <directx/d3d12.h>
 #include <dxguids/dxguids.h>
 
@@ -110,6 +114,7 @@ struct wsi_win32_swapchain {
    mtx_t                      acquire_mutex;
    struct u_cnd_monotonic     acquire_cond;
    uint64_t                     flip_sequence;
+   uint64_t                     last_submitted_present_id;
    VkResult                     status;
    VkExtent2D                 extent;
    HWND wnd;
@@ -490,6 +495,9 @@ wsi_create_dxgi_image_mem(const struct wsi_swapchain *drv_chain,
    VkImageCreateInfo create = info->create;
 
    create.usage &= ~VK_IMAGE_USAGE_STORAGE_BIT;
+   /* The private DXGI destination is typed. Mutable application images use
+    * their own castable/typeless resource and are copied into this image. */
+   create.flags &= ~(VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT);
    create.initialLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
    result = wsi->CreateImage(chain->base.device, &create,
@@ -508,7 +516,7 @@ wsi_create_dxgi_image_mem(const struct wsi_swapchain *drv_chain,
    const VkMemoryDedicatedAllocateInfo memory_dedicated_info = {
       VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
       nullptr,
-      image->blit.image,
+      image->image,
       VK_NULL_HANDLE,
    };
    const VkMemoryAllocateInfo memory_info = {
@@ -529,7 +537,7 @@ wsi_dxgi_image_needs_blit(const struct wsi_device *wsi,
 {
    if (wsi->win32.requires_blits && wsi->win32.requires_blits(device))
       return WSI_SWAPCHAIN_IMAGE_BLIT;
-   else if (params->storage_image)
+   else if (params->storage_image || params->mutable_format)
       return WSI_SWAPCHAIN_IMAGE_BLIT;
    return WSI_SWAPCHAIN_NO_BLIT;
 }
@@ -650,6 +658,85 @@ wsi_win32_swapchain_destroy(struct wsi_swapchain *drv_chain,
    vk_free(allocator, chain);
    return VK_SUCCESS;
 }
+
+#ifndef _XBOX_UWP
+static UINT16
+wsi_win32_hdr_chromaticity_to_dxgi(float value)
+{
+   /* DXGI stores CIE 1931 coordinates normalized to 50,000. */
+   if (!(value > 0.0f))
+      return 0;
+   if (value >= 1.0f)
+      return 50000;
+   return (UINT16)(value * 50000.0f + 0.5f);
+}
+
+static UINT
+wsi_win32_hdr_luminance_to_dxgi(float value, double scale)
+{
+   if (!(value > 0.0f))
+      return 0;
+
+   const double scaled = (double)value * scale;
+   if (scaled >= (double)UINT_MAX - 0.5)
+      return UINT_MAX;
+   return (UINT)(scaled + 0.5);
+}
+
+static UINT16
+wsi_win32_hdr_light_level_to_dxgi(float value)
+{
+   if (!(value > 0.0f))
+      return 0;
+   if (value >= (float)UINT16_MAX - 0.5f)
+      return UINT16_MAX;
+   return (UINT16)(value + 0.5f);
+}
+
+static void
+wsi_win32_swapchain_set_hdr_metadata(struct wsi_swapchain *drv_chain,
+                                    const VkHdrMetadataEXT *metadata)
+{
+   struct wsi_win32_swapchain *chain =
+      (struct wsi_win32_swapchain *)drv_chain;
+   if (!chain->dxgi)
+      return;
+
+   DXGI_HDR_METADATA_HDR10 dxgi_metadata = { 0 };
+   dxgi_metadata.RedPrimary[0] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->displayPrimaryRed.x);
+   dxgi_metadata.RedPrimary[1] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->displayPrimaryRed.y);
+   dxgi_metadata.GreenPrimary[0] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->displayPrimaryGreen.x);
+   dxgi_metadata.GreenPrimary[1] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->displayPrimaryGreen.y);
+   dxgi_metadata.BluePrimary[0] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->displayPrimaryBlue.x);
+   dxgi_metadata.BluePrimary[1] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->displayPrimaryBlue.y);
+   dxgi_metadata.WhitePoint[0] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->whitePoint.x);
+   dxgi_metadata.WhitePoint[1] =
+      wsi_win32_hdr_chromaticity_to_dxgi(metadata->whitePoint.y);
+   dxgi_metadata.MaxMasteringLuminance =
+      wsi_win32_hdr_luminance_to_dxgi(metadata->maxLuminance, 1.0);
+   /* DXGI expresses minimum mastering luminance in 0.0001-nit units. */
+   dxgi_metadata.MinMasteringLuminance =
+      wsi_win32_hdr_luminance_to_dxgi(metadata->minLuminance, 10000.0);
+   dxgi_metadata.MaxContentLightLevel =
+      wsi_win32_hdr_light_level_to_dxgi(metadata->maxContentLightLevel);
+   dxgi_metadata.MaxFrameAverageLightLevel =
+      wsi_win32_hdr_light_level_to_dxgi(metadata->maxFrameAverageLightLevel);
+
+   IDXGISwapChain4 *dxgi4 = nullptr;
+   if (SUCCEEDED(chain->dxgi->QueryInterface(IID_PPV_ARGS(&dxgi4)))) {
+      dxgi4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10,
+                            sizeof(dxgi_metadata), &dxgi_metadata);
+      dxgi4->Release();
+   }
+}
+#endif
 
 static struct wsi_image *
 wsi_win32_get_wsi_image(struct wsi_swapchain *drv_chain,
@@ -843,8 +930,17 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
 
    assert(image->state == WSI_IMAGE_DRAWING);
 
-   if (chain->dxgi)
-      return wsi_win32_queue_present_dxgi(chain, image, damage);
+   if (chain->dxgi) {
+      VkResult result = wsi_win32_queue_present_dxgi(chain, image, damage);
+      /* IDs identify accepted presents, not GPU completion. present_wait
+       * remains unadvertised; failed presents must not advance this state. */
+      if (result == VK_SUCCESS && present_id) {
+         mtx_lock(&chain->acquire_mutex);
+         chain->last_submitted_present_id = present_id;
+         mtx_unlock(&chain->acquire_mutex);
+      }
+      return result;
+   }
 
    char *ptr = (char *)image->base.cpu_map;
    char *dptr = (char *)image->sw.ppvBits;
@@ -861,6 +957,11 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
 
    wsi_win32_set_image_idle(chain, image);
 
+   if (chain->status == VK_SUCCESS && present_id) {
+      mtx_lock(&chain->acquire_mutex);
+      chain->last_submitted_present_id = present_id;
+      mtx_unlock(&chain->acquire_mutex);
+   }
    return chain->status;
 }
 
@@ -895,7 +996,9 @@ wsi_win32_surface_create_swapchain_dxgi(
    DXGI_SWAP_CHAIN_DESC1 desc = {
       create_info->imageExtent.width,
       create_info->imageExtent.height,
-      DXGI_FORMAT_B8G8R8A8_UNORM,
+      create_info->imageFormat == VK_FORMAT_R8G8B8A8_UNORM ||
+      create_info->imageFormat == VK_FORMAT_R8G8B8A8_SRGB ?
+         DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM,
       create_info->imageArrayLayers > 1,  // Stereo
       { 1 },                              // SampleDesc
       0,                                  // Usage (filled in below)
@@ -997,6 +1100,8 @@ wsi_win32_surface_create_swapchain(
       { WSI_IMAGE_TYPE_DXGI },
    };
    dxgi_image_params.storage_image = (image_usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0;
+   dxgi_image_params.mutable_format =
+      (create_info->flags & VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR) != 0;
 
    struct wsi_cpu_image_params cpu_image_params = {
       { WSI_IMAGE_TYPE_CPU },
@@ -1037,6 +1142,9 @@ wsi_win32_surface_create_swapchain(
       result = wsi_win32_surface_create_swapchain_dxgi(surface, device, wsi, create_info, chain);
       if (result != VK_SUCCESS)
          goto fail;
+#ifndef _XBOX_UWP
+      chain->base.set_hdr_metadata = wsi_win32_swapchain_set_hdr_metadata;
+#endif
    }
 
    for (uint32_t image = 0; image < num_images; image++) {

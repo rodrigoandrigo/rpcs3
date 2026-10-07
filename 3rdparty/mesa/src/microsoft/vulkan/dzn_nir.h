@@ -129,6 +129,9 @@ struct dzn_nir_point_gs_info {
    bool front_ccw;
    bool depth_bias;
    bool depth_bias_dynamic;
+   bool cull_dynamic;
+   bool front_face_dynamic;
+   bool depth_bias_enable_dynamic;
    DXGI_FORMAT ds_fmt;
    /* Constant values */
    float constant_depth_bias;

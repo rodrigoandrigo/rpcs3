@@ -39,6 +39,11 @@ static const struct spirv_capabilities
 spirv_caps = {
    .Shader = true,
    .Geometry = true,
+   /* Vulkan 1.2 feature-gated system-value outputs. */
+   .ShaderLayer = true,
+   .ShaderViewportIndex = true,
+   /* Promoted EXT alias is enabled only when both core features are supported. */
+   .ShaderViewportIndexLayerEXT = true,
    .DrawParameters = true,
    .MultiView = true,
    .GroupNonUniform = true,
@@ -57,6 +62,8 @@ spirv_caps = {
    .RoundingModeRTZ = true,
    .Float16 = true,
    .Int16 = true,
+   /* 8-bit ALU is widened by nir_lower_bit_size before DXIL emission. */
+   .Int8 = true,
    .StorageBuffer8BitAccess = true,
    .UniformAndStorageBuffer8BitAccess = true,
    .StoragePushConstant8 = true,
@@ -78,6 +85,7 @@ spirv_caps = {
    .ImageQuery = true,
    .Int64 = true,
    .Float64 = true,
+   .IntegerFunctions2INTEL = true,
    .Tessellation = true,
    .PhysicalStorageBufferAddresses = true,
 };
@@ -201,6 +209,11 @@ temp_var_info(const struct glsl_type* type, unsigned* size, unsigned* align)
 static nir_variable *
 add_runtime_data_var(nir_shader *nir, unsigned desc_set, unsigned binding)
 {
+   /* Generated Dozen point-fill GS can already declare the same runtime CBV. */
+   nir_foreach_variable_with_modes(var, nir, nir_var_mem_ubo) {
+      if (var->data.descriptor_set == desc_set && var->data.binding == binding)
+         return var;
+   }
    unsigned runtime_data_size =
       nir->info.stage == MESA_SHADER_COMPUTE
          ? sizeof(struct dxil_spirv_compute_runtime_data)
@@ -1047,6 +1060,7 @@ dxil_spirv_nir_passes(nir_shader *nir,
       .lower_subgroup_masks = true,
       .lower_to_scalar = true,
       .lower_relative_shuffle = true,
+      .lower_rotate_to_shuffle = true,
       .lower_inverse_ballot = true,
    };
    if (nir->info.stage != MESA_SHADER_FRAGMENT &&
@@ -1140,11 +1154,26 @@ dxil_spirv_nir_passes(nir_shader *nir,
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_global,
               nir_address_format_32bit_index_offset_pack64);
 
-   if (nir->info.shared_memory_explicit_layout) {
+   /* Zero initialization uses byte-addressed shared-memory operations. Route
+    * those shaders through the same explicit-I/O path as explicitly laid out
+    * Workgroup memory, so DXIL can clear the complete group-shared allocation.
+    */
+   if (nir->info.shared_memory_explicit_layout ||
+       (nir->info.stage == MESA_SHADER_COMPUTE &&
+        nir->info.zero_initialize_shared_memory)) {
       NIR_PASS(_, nir, nir_lower_vars_to_explicit_types, nir_var_mem_shared,
                  shared_var_info);
       NIR_PASS(_, nir, dxil_nir_split_unaligned_loads_stores, nir_var_mem_shared);
       NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_shared, nir_address_format_32bit_offset);
+      if (nir->info.stage == MESA_SHADER_COMPUTE &&
+          nir->info.zero_initialize_shared_memory &&
+          nir->info.shared_size > 0) {
+         /* DXIL's TGSM lowering backs shared memory with uint words. */
+         const unsigned chunk_size = 4;
+         const unsigned shared_size = align(nir->info.shared_size, chunk_size);
+         NIR_PASS(_, nir, nir_zero_initialize_shared_memory, shared_size,
+                  chunk_size);
+      }
       NIR_PASS(_, nir, dxil_nir_scratch_and_shared_to_dxil);
    } else {
       NIR_PASS(_, nir, nir_split_struct_vars, nir_var_mem_shared);
