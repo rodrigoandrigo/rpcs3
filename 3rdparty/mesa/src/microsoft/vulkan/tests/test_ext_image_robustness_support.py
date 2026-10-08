@@ -100,10 +100,10 @@ class ImageRobustnessSupportTest(unittest.TestCase):
             self.assertIn(f"case nir_intrinsic_{intrinsic}:", self.robust_lowering)
 
     def test_pipeline_lowers_only_when_feature_is_enabled(self):
-        guard = "if (device->vk.enabled_features.robustImageAccess ||"
+        guard = "if (options->robustness.images == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_EXT ||"
         lowering = "NIR_PASS(_, *nir, nir_lower_robust_access,"
         self.assertIn(guard, self.pipeline)
-        self.assertIn("device->vk.enabled_features.robustImageAccess2)", self.pipeline)
+        self.assertIn("options->robustness.images == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT)", self.pipeline)
         self.assertIn(lowering, self.pipeline)
         self.assertLess(self.pipeline.index(guard), self.pipeline.index(lowering))
         self.assertLess(

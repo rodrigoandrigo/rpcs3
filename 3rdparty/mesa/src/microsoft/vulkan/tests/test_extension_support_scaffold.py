@@ -28,12 +28,12 @@ class ExtensionSupportScaffoldTest(unittest.TestCase):
         )
 
     def test_all_reviewed_pending_candidates_have_a_scaffold(self):
-        self.assertEqual(self.data["counts"]["reviewed_candidates"], 175)
-        self.assertEqual(self.data["counts"]["implemented_in_review"], 42)
-        self.assertEqual(self.data["counts"]["pending_scaffolded"], 133)
-        self.assertEqual(len(self.data["extensions"]), 133)
+        self.assertEqual(self.data["counts"]["reviewed_candidates"], 177)
+        self.assertEqual(self.data["counts"]["implemented_in_review"], 52)
+        self.assertEqual(self.data["counts"]["pending_scaffolded"], 125)
+        self.assertEqual(len(self.data["extensions"]), 125)
         self.assertEqual(
-            len({entry["field"] for entry in self.data["extensions"]}), 133
+            len({entry["field"] for entry in self.data["extensions"]}), 125
         )
 
     def test_no_pending_candidate_is_advertised(self):

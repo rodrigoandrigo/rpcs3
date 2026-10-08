@@ -24,6 +24,7 @@
 #include "dzn_private.h"
 
 #include "vk_alloc.h"
+#include "vk_buffer.h"
 #include "vk_common_entrypoints.h"
 #include "vk_cmd_enqueue_entrypoints.h"
 #include "vk_debug_report.h"
@@ -207,6 +208,9 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .EXT_extended_dynamic_state2          = true,
       .EXT_vertex_input_dynamic_state       = true,
       .KHR_present_id                       = true,
+#ifdef _WIN32
+      .KHR_present_wait                     = true,
+#endif
       .KHR_swapchain_mutable_format         = true,
       .EXT_conservative_rasterization       =
          pdev->options.ConservativeRasterizationTier != D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED,
@@ -269,7 +273,17 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .KHR_separate_depth_stencil_layouts    = true,
       .KHR_shader_draw_parameters            = true,
       .KHR_shader_expect_assume              = true,
-      .KHR_shader_float16_int8               = pdev->options4.Native16BitShaderOpsSupported,
+      /* Int8 ALU is widened in NIR, independently of native 16-bit hardware. */
+      .KHR_shader_float16_int8               = true,
+      .KHR_workgroup_memory_explicit_layout  = true,
+      .EXT_conditional_rendering             = true,
+      /* Stream output is experimental until position/point-GS capture is exact. */
+      .EXT_provoking_vertex                 = true,
+      .EXT_pipeline_robustness              = true,
+      .EXT_depth_bias_control               = true,
+      .EXT_index_type_uint8                 = true,
+      .KHR_index_type_uint8                 = true,
+      .KHR_maintenance5                     = true,
       .KHR_shader_float_controls             = true,
       /* Mesa SPIR-V/NIR consumes FloatControls2 fast-math defaults and modes. */
       .KHR_shader_float_controls2            = true,
@@ -916,6 +930,9 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
       /* Never emulate render-target stores with an SRV-only swizzle. */
       .formatA4B4G4R4 = pdev->support_a4b4g4r4,
       .presentId = true,
+#ifdef _WIN32
+      .presentWait = true,
+#endif
       .extendedDynamicState = pdev->options14.IndependentFrontAndBackStencilRefMaskSupported,
       .extendedDynamicState2 = true,
       .extendedDynamicState2LogicOp = false,
@@ -1011,7 +1028,28 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
       .shaderBufferInt64Atomics           = false,
       .shaderSharedInt64Atomics           = false,
       .shaderFloat16                      = pdev->options4.Native16BitShaderOpsSupported,
-      .shaderInt8                         = support_8bit,
+      .shaderInt8                         = true,
+      .workgroupMemoryExplicitLayout      = true,
+      .workgroupMemoryExplicitLayoutScalarBlockLayout = true,
+      .workgroupMemoryExplicitLayout8BitAccess = true,
+      .workgroupMemoryExplicitLayout16BitAccess = true,
+      .conditionalRendering               = true,
+      .pipelineRobustness                  = true,
+      .indexTypeUint8                      = true,
+      .maintenance5                        = true,
+      /* Native D3D12 bias uses the depth-format representation. Optional
+       * forced UNORM, unit-float and exact representations are not exposed. */
+      .depthBiasControl                    = true,
+      .leastRepresentableValueForceUnormRepresentation = false,
+      .floatRepresentation                 = false,
+      .depthBiasExact                      = false,
+      .inheritedConditionalRendering      = false,
+      .transformFeedback                  = false,
+      .geometryStreams                    = false,
+      /* D3D12's first-vertex convention is native. A generic last-vertex
+       * path also needs lines, integer varyings and arbitrary user GS. */
+      .provokingVertexLast                 = true,
+      .transformFeedbackPreservesProvokingVertex = false,
 
       .descriptorIndexing                                   = support_descriptor_indexing,
       .shaderInputAttachmentArrayDynamicIndexing            = true,
@@ -1361,6 +1399,28 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       .robustStorageBufferAccessSizeAlignment = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT,
       /* D3D12 SV_Barycentrics ordering depends on its provoking-vertex convention. */
       .triStripVertexOrderIndependentOfProvokingVertex = false,
+      .maxTransformFeedbackStreams = 1,
+      .maxTransformFeedbackBuffers = D3D12_SO_BUFFER_SLOT_COUNT,
+      .maxTransformFeedbackBufferSize = UINT32_MAX,
+      .maxTransformFeedbackStreamDataSize = D3D12_SO_BUFFER_MAX_WRITE_WINDOW_IN_BYTES,
+      .maxTransformFeedbackBufferDataSize = D3D12_SO_BUFFER_MAX_WRITE_WINDOW_IN_BYTES,
+      .maxTransformFeedbackBufferDataStride = D3D12_SO_BUFFER_MAX_STRIDE_IN_BYTES,
+      .transformFeedbackQueries = false,
+      .defaultRobustnessStorageBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT,
+      .defaultRobustnessUniformBuffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT,
+      .defaultRobustnessVertexInputs = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT,
+      .defaultRobustnessImages = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED_EXT,
+      .earlyFragmentMultisampleCoverageAfterSampleCounting = false,
+      .earlyFragmentSampleMaskTestBeforeSampleCounting = false,
+      .depthStencilSwizzleOneSupport = true,
+      .polygonModePointSize = false,
+      .nonStrictSinglePixelWideLinesUseParallelogram = false,
+      .nonStrictWideLinesUseParallelogram = false,
+      .transformFeedbackStreamsLinesTriangles = false,
+      .transformFeedbackRasterizationStreamSelect = false,
+      .transformFeedbackDraw = false,
+      .provokingVertexModePerPipeline = true,
+      .transformFeedbackPreservesTriangleFanProvokingVertex = false,
       .quadDivergentImplicitLod = false,
       .maxUpdateAfterBindDescriptorsInAllPools = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
       .maxPerStageDescriptorUpdateAfterBindSamplers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
@@ -1749,6 +1809,18 @@ dzn_physical_device_get_format_properties(struct dzn_physical_device *pdev,
       base_props->bufferFeatures =
          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
    }
+   /* R/B-swizzled 1555 is a sampling/transfer format, not a render target. */
+   if (format == VK_FORMAT_A1B5G5R5_UNORM_PACK16_KHR) {
+      base_props->optimalTilingFeatures &=
+         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+         VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+      base_props->linearTilingFeatures &= base_props->optimalTilingFeatures;
+      base_props->bufferFeatures = 0;
+   }
+   /* Native A8 is not a buffer SRV/UAV format. */
+   if (format == VK_FORMAT_A8_UNORM_KHR)
+      base_props->bufferFeatures = 0;
 
    /* depth/stencil format shouldn't advertise buffer features */
    if (vk_format_is_depth_or_stencil(format))
@@ -2954,6 +3026,7 @@ dzn_device_create(struct dzn_physical_device *pdev,
     * tables so Vulkan descriptor-range bounds remain enforceable.
     */
    device->bindless = !device->vk.enabled_features.robustBufferAccess2 &&
+      !device->vk.enabled_features.pipelineRobustness &&
       ((instance->debug_flags & DZN_DEBUG_BINDLESS) != 0 ||
        device->vk.enabled_features.descriptorIndexing ||
        device->vk.enabled_extensions.EXT_descriptor_indexing ||
@@ -3827,17 +3900,18 @@ dzn_buffer_create(struct dzn_device *device,
    vk_object_base_init(&device->vk, &buf->base, VK_OBJECT_TYPE_BUFFER);
    buf->create_flags = pCreateInfo->flags;
    buf->size = pCreateInfo->size;
-   buf->usage = pCreateInfo->usage;
+   buf->usage = vk_buffer_usage_flags(pCreateInfo);
 
+   uint64_t resource_size = buf->size;
    if (buf->usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
-      buf->size = MAX2(buf->size, ALIGN_POT(buf->size, 256));
-   if (buf->usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
-      buf->size = MAX2(buf->size, ALIGN_POT(buf->size, 4));
+      resource_size = ALIGN_POT(resource_size, 256);
+   if (buf->usage & (VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT))
+      resource_size = ALIGN_POT(resource_size, 4);
 
    buf->desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
    buf->desc.Format = DXGI_FORMAT_UNKNOWN;
    buf->desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
-   buf->desc.Width = buf->size;
+   buf->desc.Width = resource_size;
    buf->desc.Height = 1;
    buf->desc.DepthOrArraySize = 1;
    buf->desc.MipLevels = 1;

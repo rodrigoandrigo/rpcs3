@@ -105,7 +105,7 @@ class DepthClipControlSupportTest(unittest.TestCase):
 
     def test_synthetic_geometry_shader_is_converted_before_z_flip(self):
         create_gs = self.pipeline.index(
-            "dzn_nir_polygon_point_mode_gs(pipeline->templates.shaders[MESA_SHADER_VERTEX].nir"
+            "dzn_nir_polygon_point_mode_gs(previous, &gs_info)"
         )
         halfz = self.pipeline.index(
             "NIR_PASS(_, pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir,\n"

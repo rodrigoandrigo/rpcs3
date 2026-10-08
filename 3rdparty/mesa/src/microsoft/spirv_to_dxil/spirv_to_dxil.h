@@ -135,6 +135,8 @@ struct dxil_spirv_vertex_runtime_data {
    uint32_t point_cull_mode;
    uint32_t point_front_ccw;
    uint32_t point_depth_bias_enable;
+   uint32_t provoking_vertex_index;
+   uint32_t provoking_strip;
 };
 
 enum dxil_spirv_yz_flip_mode {

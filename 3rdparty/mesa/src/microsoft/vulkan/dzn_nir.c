@@ -31,6 +31,8 @@
 #include "nir_to_dxil.h"
 #include "nir_builder.h"
 #include "nir_builtin_builder.h"
+#include "nir_xfb_info.h"
+#include "util/u_dynarray.h"
 #include "dxil_nir.h"
 #include "vk_nir_convert_ycbcr.h"
 
@@ -211,7 +213,8 @@ dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type)
 
       if (type.triangle_fan_primitive_restart) {
          triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_channel(&b, draw_info1, 2);
-         triangle_fan_exec_vals[triangle_fan_exec_param_count++] = nir_channel(&b, draw_info1, 0);
+         triangle_fan_exec_vals[triangle_fan_exec_param_count++] =
+            nir_iadd(&b, nir_channel(&b, draw_info1, 2), nir_channel(&b, draw_info1, 0));
          uint32_t index_count_offset = draw_args_offset +
             offsetof(D3D12_DRAW_INDEXED_ARGUMENTS, IndexCountPerInstance);
          nir_def *exec_buf_start =
@@ -224,7 +227,7 @@ dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type)
                               nir_imul(&b, exec_stride, index)));
          addr_lo_overflow = nir_ult(&b, exec_buf_start_lo, nir_channel(&b, exec_buf_start, 0));
          nir_def *exec_buf_start_hi =
-            nir_iadd(&b, nir_channel(&b, exec_buf_start, 0),
+            nir_iadd(&b, nir_channel(&b, exec_buf_start, 1),
                      nir_bcsel(&b, addr_lo_overflow, nir_imm_int(&b, 1), nir_imm_int(&b, 0)));
          triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_lo;
          triangle_fan_exec_vals[triangle_fan_exec_param_count++] = exec_buf_start_hi;
@@ -293,7 +296,7 @@ dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type)
 }
 
 nir_shader *
-dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size)
+dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size, bool strip)
 {
    assert(old_index_size == 2 || old_index_size == 4);
 
@@ -333,6 +336,8 @@ dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size)
    nir_variable *index0_var =
       nir_local_variable_create(b.impl, glsl_uint_type(), "index0_var");
    nir_store_var(&b, index0_var, prim_restart_val, 1);
+   nir_variable *parity = nir_local_variable_create(b.impl, glsl_uint_type(), "strip_parity");
+   nir_store_var(&b, parity, nir_imm_int(&b, 0), 1);
 
    /*
     * Filter out all primitive-restart magic values, and generate a triangle list
@@ -404,6 +409,8 @@ dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size)
    }
 
    nir_store_var(&b, index0_var, index_val, 1);
+   if (strip)
+      nir_store_var(&b, parity, nir_imm_int(&b, 0), 1);
    nir_store_var(&b, old_index_ptr_var, nir_iadd_imm(&b, old_index_ptr, 1), 1);
    nir_jump(&b, nir_jump_continue);
    nir_pop_if(&b, NULL);
@@ -436,6 +443,14 @@ dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size)
    nir_push_else(&b, NULL);
    nir_def *new_indices =
       nir_vec3(&b, nir_channel(&b, index12, 0), nir_channel(&b, index12, 1), index0);
+   if (strip) {
+      nir_def *odd = nir_ine_imm(&b, nir_load_var(&b, parity), 0);
+      nir_def *middle = nir_channel(&b, index12, 0);
+      new_indices = nir_vec3(&b, nir_bcsel(&b, odd, middle, index0),
+         nir_bcsel(&b, odd, index0, middle), nir_channel(&b, index12, 1));
+      nir_store_var(&b, index0_var, middle, 1);
+      nir_store_var(&b, parity, nir_ixor(&b, nir_load_var(&b, parity), nir_imm_int(&b, 1)), 1);
+   }
    nir_def *new_index_ptr = nir_load_var(&b, new_index_ptr_var);
    nir_def *new_index_offset = nir_imul_imm(&b, new_index_ptr, sizeof(uint32_t));
    nir_store_ssbo(&b, new_indices, new_index_buf_desc,
@@ -458,7 +473,7 @@ dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size)
 nir_shader *
 dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size)
 {
-   assert(old_index_size == 0 || old_index_size == 2 || old_index_size == 4);
+   assert(old_index_size == 0 || old_index_size == 1 || old_index_size == 2 || old_index_size == 4);
 
    nir_builder b =
       nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
@@ -480,12 +495,31 @@ dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size)
    }
 
    nir_def *params =
-      nir_load_ubo(&b, sizeof(struct dzn_triangle_fan_rewrite_index_params) / 4, 32,
+      nir_load_ubo(&b, old_index_size == 1 ? 3 : sizeof(struct dzn_triangle_fan_rewrite_index_params) / 4, 32,
                    params_desc, nir_imm_int(&b, 0),
                    .align_mul = 4, .align_offset = 0, .range_base = 0, .range = ~0);
 
    nir_def *triangle = nir_channel(&b, nir_load_global_invocation_id(&b, 32), 0);
    nir_def *new_indices;
+
+   if (old_index_size == 1) {
+      nir_def *gid = nir_load_global_invocation_id(&b, 32);
+      nir_def *index = nir_iadd(&b, nir_channel(&b, gid, 0),
+                               nir_imul_imm(&b, nir_channel(&b, gid, 1), 65535));
+      nir_push_if(&b, nir_ult(&b, index, nir_channel(&b, params, 1)));
+      nir_def *offset = nir_iadd(&b, index, nir_channel(&b, params, 0));
+      nir_def *word = nir_load_ssbo(&b, 1, 32, old_index_buf_desc,
+                                    nir_iand_imm(&b, offset, ~3u), .align_mul = 4);
+      nir_def *value = nir_iand_imm(&b, nir_ushr(&b, word,
+         nir_imul_imm(&b, nir_iand_imm(&b, offset, 3), 8)), 0xff);
+      nir_def *restart = nir_iand(&b, nir_ine_imm(&b, nir_channel(&b, params, 2), 0),
+                                  nir_ieq_imm(&b, value, 0xff));
+      value = nir_bcsel(&b, restart, nir_imm_int(&b, ~0u), value);
+      nir_store_ssbo(&b, value, new_index_buf_desc, nir_imul_imm(&b, index, 4),
+                     .write_mask = 1, .access = ACCESS_NON_READABLE, .align_mul = 4);
+      nir_pop_if(&b, NULL);
+      return b.shader;
+   }
 
    if (old_index_size > 0) {
       nir_def *old_first_index = nir_channel(&b, params, 0);
@@ -848,6 +882,231 @@ load_point_runtime_data(nir_builder *b, struct dzn_nir_point_gs_info *info, unsi
       .align_offset = offset);
 }
 
+bool
+dzn_nir_preserve_xfb_position(nir_shader *nir)
+{
+   bool capture_position = false;
+   if (!nir->xfb_info)
+      return true;
+   for (unsigned i = 0; i < nir->xfb_info->output_count; i++)
+      capture_position |= nir->xfb_info->outputs[i].location == VARYING_SLOT_POS;
+   if (!capture_position)
+      return true;
+
+   nir_variable *position = NULL;
+   uint64_t occupied = BITFIELD64_BIT(VARYING_SLOT_VAR12);
+   nir_foreach_shader_out_variable(var, nir) {
+      if (var->data.location < 64)
+         occupied |= BITFIELD64_RANGE(var->data.location,
+                                     glsl_count_attribute_slots(var->type, false));
+      if (var->data.location == VARYING_SLOT_POS)
+         position = var;
+   }
+   unsigned location = VARYING_SLOT_VAR0;
+   while (location <= VARYING_SLOT_VAR31 && (occupied & BITFIELD64_BIT(location)))
+      location++;
+   if (!position || location > VARYING_SLOT_VAR31)
+      return false;
+
+   /* SO observes shader outputs before clip-volume/viewport conversions.
+    * Mirror every masked store, rather than loading position at function exit:
+    * a GS can emit several distinct vertices from a single invocation.
+    */
+   nir_variable *original = nir_variable_clone(position, nir);
+   nir_variable_set_name(nir, original, "dzn_xfb_original_position");
+   original->data.location = location;
+   original->data.always_active_io = true;
+   original->data.is_xfb = true;
+   original->data.is_xfb_only = true;
+   nir_shader_add_variable(nir, original);
+   position->data.explicit_xfb_buffer = false;
+   position->data.explicit_xfb_stride = false;
+   position->data.explicit_offset = false;
+   position->data.is_xfb = false;
+   position->data.is_xfb_only = false;
+   for (unsigned i = 0; i < nir->xfb_info->output_count; i++)
+      if (nir->xfb_info->outputs[i].location == VARYING_SLOT_POS)
+         nir->xfb_info->outputs[i].location = location;
+
+   nir_foreach_function_impl(impl, nir) {
+      nir_builder b = nir_builder_create(impl);
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr_safe(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            if (intr->intrinsic != nir_intrinsic_store_deref ||
+                nir_intrinsic_get_var(intr, 0) != position)
+               continue;
+            b.cursor = nir_before_instr(instr);
+            nir_store_var(&b, original, intr->src[1].ssa,
+                          nir_intrinsic_write_mask(intr));
+         }
+      }
+      nir_progress(true, impl, nir_metadata_control_flow);
+   }
+   return true;
+}
+
+nir_shader *
+dzn_nir_provoking_vertex_gs(const nir_shader *previous, enum mesa_prim primitive,
+                            unsigned register_space, bool primitive_id)
+{
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_GEOMETRY,
+      previous->options, "last_provoking_passthrough");
+   nir_shader *nir = b.shader;
+   unsigned vertices = primitive == MESA_PRIM_POINTS ? 1 :
+                       primitive == MESA_PRIM_LINES ? 2 : 3;
+   nir->info.gs.input_primitive = primitive;
+   nir->info.gs.output_primitive = primitive == MESA_PRIM_POINTS ? MESA_PRIM_POINTS :
+      primitive == MESA_PRIM_LINES ? MESA_PRIM_LINE_STRIP : MESA_PRIM_TRIANGLE_STRIP;
+   nir->info.gs.vertices_in = nir->info.gs.vertices_out = vertices;
+   nir->info.gs.invocations = 1;
+   nir->info.gs.active_stream_mask = 1;
+   nir_variable *inputs[VARYING_SLOT_MAX * 4], *outputs[VARYING_SLOT_MAX * 4];
+   unsigned count = 0;
+   nir_foreach_shader_out_variable(var, previous) {
+      inputs[count] = nir_variable_clone(var, nir);
+      inputs[count]->type = glsl_array_type(var->type, vertices, 0);
+      inputs[count]->data.mode = nir_var_shader_in;
+      nir_shader_add_variable(nir, inputs[count]);
+      outputs[count] = nir_variable_clone(var, nir);
+      nir_shader_add_variable(nir, outputs[count]);
+      count++;
+   }
+   struct dzn_nir_point_gs_info runtime = {
+      .runtime_data_cbv = { register_space, 0 },
+   };
+   nir_def *last = load_point_runtime_data(&b, &runtime,
+      offsetof(struct dxil_spirv_vertex_runtime_data, provoking_vertex_index));
+   if (primitive == MESA_PRIM_TRIANGLES) {
+      nir_def *strip = load_point_runtime_data(&b, &runtime,
+         offsetof(struct dxil_spirv_vertex_runtime_data, provoking_strip));
+      last = nir_bcsel(&b, nir_iand(&b, nir_ine_imm(&b, strip, 0),
+         nir_ine_imm(&b, nir_iand_imm(&b, nir_load_primitive_id(&b), 1), 0)),
+         nir_imm_int(&b, 1), last);
+   }
+   nir_variable *id = primitive_id ? nir_create_variable_with_location(nir,
+      nir_var_shader_out, VARYING_SLOT_PRIMITIVE_ID, glsl_int_type()) : NULL;
+   for (unsigned vertex = 0; vertex < vertices; vertex++) {
+      for (unsigned i = 0; i < count; i++) {
+         nir_def *index = outputs[i]->data.interpolation == INTERP_MODE_FLAT &&
+                         !outputs[i]->data.is_xfb_only ? last : nir_imm_int(&b, vertex);
+         copy_vars(&b, nir_build_deref_var(&b, outputs[i]),
+            nir_build_deref_array(&b, nir_build_deref_var(&b, inputs[i]), index));
+      }
+      if (id)
+         nir_store_var(&b, id, nir_load_primitive_id(&b), 1);
+      nir_emit_vertex(&b, 0);
+   }
+   nir_end_primitive(&b, 0);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
+   return nir;
+}
+
+/* Delay geometry emissions by one (line) or two (triangle) vertices. D3D's
+ * leading vertex then carries the Flat payload of Vulkan's last vertex.
+ * Geometry, strip winding, vertex count and shader side effects are unchanged:
+ * unlike expanding strips into lists this cannot exceed the GS output limit.
+ */
+bool
+dzn_nir_lower_last_provoking_vertex(nir_shader *nir)
+{
+   if (nir->info.stage != MESA_SHADER_GEOMETRY ||
+       nir->info.gs.output_primitive == MESA_PRIM_POINTS)
+      return false;
+   unsigned delay = nir->info.gs.output_primitive == MESA_PRIM_LINE_STRIP ? 1 : 2;
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   nir_builder b = nir_builder_create(impl);
+   nir_variable *out[VARYING_SLOT_MAX * 4], *history[VARYING_SLOT_MAX * 4];
+   unsigned variables = 0;
+   bool flat = false;
+   nir_foreach_shader_out_variable(var, nir) {
+      out[variables] = var;
+      history[variables] = nir_local_variable_create(impl,
+         glsl_array_type(var->type, 3, 0), "provoking_history");
+      flat |= var->data.interpolation == INTERP_MODE_FLAT && !var->data.is_xfb_only;
+      variables++;
+   }
+   if (!flat)
+      return false;
+   struct util_dynarray operations;
+   util_dynarray_init(&operations, NULL);
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+         if (intr->intrinsic == nir_intrinsic_emit_vertex ||
+             intr->intrinsic == nir_intrinsic_emit_vertex_with_counter ||
+             intr->intrinsic == nir_intrinsic_end_primitive ||
+             intr->intrinsic == nir_intrinsic_end_primitive_with_counter)
+            util_dynarray_append_typed(&operations, nir_intrinsic_instr *, intr);
+      }
+   }
+   nir_variable *count = nir_local_variable_create(impl, glsl_uint_type(), "provoking_count");
+   b.cursor = nir_before_impl(impl);
+   nir_store_var(&b, count, nir_imm_int(&b, 0), 1);
+
+   /* A NULL operation flushes the implicitly terminated final strip. */
+   util_dynarray_append_typed(&operations, nir_intrinsic_instr *, NULL);
+   util_dynarray_foreach(&operations, nir_intrinsic_instr *, operation) {
+      nir_intrinsic_instr *intr = *operation;
+      b.cursor = intr ? nir_before_instr(&intr->instr) : nir_after_impl(impl);
+      nir_def *n = nir_load_var(&b, count);
+      bool emit = intr && (intr->intrinsic == nir_intrinsic_emit_vertex ||
+                          intr->intrinsic == nir_intrinsic_emit_vertex_with_counter);
+      if (emit) {
+         nir_def *slot = nir_umod_imm(&b, n, 3);
+         for (unsigned i = 0; i < variables; i++)
+            copy_vars(&b, nir_build_deref_array(&b, nir_build_deref_var(&b, history[i]), slot),
+                      nir_build_deref_var(&b, out[i]));
+         nir_if *ready = nir_push_if(&b, nir_uge_imm(&b, n, delay));
+         nir_def *old = nir_umod_imm(&b, nir_iadd_imm(&b, n, -(int)delay), 3);
+         for (unsigned i = 0; i < variables; i++) {
+            nir_def *source = out[i]->data.interpolation == INTERP_MODE_FLAT &&
+                             !out[i]->data.is_xfb_only ? slot : old;
+            copy_vars(&b, nir_build_deref_var(&b, out[i]),
+               nir_build_deref_array(&b, nir_build_deref_var(&b, history[i]), source));
+         }
+         nir_emit_vertex(&b, 0);
+         nir_pop_if(&b, ready);
+         /* Restore live values for subsequent shader loads/partial stores. */
+         for (unsigned i = 0; i < variables; i++)
+            copy_vars(&b, nir_build_deref_var(&b, out[i]),
+               nir_build_deref_array(&b, nir_build_deref_var(&b, history[i]), slot));
+         nir_store_var(&b, count, nir_iadd_imm(&b, n, 1), 1);
+      } else {
+         for (unsigned tail = delay; tail > 0; tail--) {
+            nir_if *pending = nir_push_if(&b, nir_uge_imm(&b, n, tail));
+            nir_def *slot = nir_umod_imm(&b, nir_iadd_imm(&b, n, -(int)tail), 3);
+            for (unsigned i = 0; i < variables; i++)
+               copy_vars(&b, nir_build_deref_var(&b, out[i]),
+                  nir_build_deref_array(&b, nir_build_deref_var(&b, history[i]), slot));
+            nir_emit_vertex(&b, 0);
+            nir_pop_if(&b, pending);
+         }
+         nir_end_primitive(&b, 0);
+         nir_if *has_live = nir_push_if(&b, nir_ine_imm(&b, n, 0));
+         nir_def *live = nir_umod_imm(&b, nir_iadd_imm(&b, n, -1), 3);
+         for (unsigned i = 0; i < variables; i++)
+            copy_vars(&b, nir_build_deref_var(&b, out[i]),
+               nir_build_deref_array(&b, nir_build_deref_var(&b, history[i]), live));
+         nir_pop_if(&b, has_live);
+         nir_store_var(&b, count, nir_imm_int(&b, 0), 1);
+      }
+      if (intr)
+         nir_instr_remove(&intr->instr);
+   }
+   util_dynarray_fini(&operations);
+   nir_progress(true, impl, nir_metadata_none);
+   NIR_PASS(_, nir, nir_lower_io_vars_to_temporaries, impl, nir_var_shader_out);
+   NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+   NIR_PASS(_, nir, nir_lower_var_copies);
+   return true;
+}
+
 nir_shader *
 dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_point_gs_info *info)
 {
@@ -903,6 +1162,13 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
    front_facing_var->data.interpolation = INTERP_MODE_FLAT;
 
    nir_def *depth_bias_scale = NULL;
+   nir_def *provoking_index = load_point_runtime_data(b, info,
+      offsetof(struct dxil_spirv_vertex_runtime_data, provoking_vertex_index));
+   nir_def *provoking_strip = load_point_runtime_data(b, info,
+      offsetof(struct dxil_spirv_vertex_runtime_data, provoking_strip));
+   provoking_index = nir_bcsel(b, nir_iand(b, nir_ine_imm(b, provoking_strip, 0),
+      nir_ine_imm(b, nir_iand_imm(b, nir_load_primitive_id(b), 1), 0)),
+      nir_imm_int(b, 1), provoking_index);
    if (info->depth_bias) {
       switch (info->ds_fmt) {
       case DXGI_FORMAT_D16_UNORM:
@@ -967,7 +1233,9 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
     *        if (loop_index >= 3)
     *           break;
     */
-   nir_if *cull_check = nir_push_if(b, cull_pass);
+   const bool captures_xfb = previous_shader->xfb_info &&
+                             previous_shader->xfb_info->output_count;
+   nir_if *cull_check = nir_push_if(b, captures_xfb ? nir_imm_true(b) : cull_pass);
    nir_loop *loop = nir_push_loop(b);
 
    nir_def *loop_index = nir_load_deref(b, loop_index_deref);
@@ -980,7 +1248,8 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
     *        EmitVertex();
     */
    for (unsigned i = 0; i < num_vars; ++i) {
-      nir_def *index = loop_index;
+      nir_def *index = out[i]->data.interpolation == INTERP_MODE_FLAT &&
+                       !out[i]->data.is_xfb_only ? provoking_index : loop_index;
       nir_deref_instr *in_value = nir_build_deref_array(b, nir_build_deref_var(b, in[i]), index);
       if (in[i] == pos_var && info->depth_bias) {
          nir_def *bias_val;
@@ -1005,6 +1274,16 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
       } else {
          copy_vars(b, nir_build_deref_var(b, out[i]), in_value);
       }
+      if (in[i] == pos_var && captures_xfb) {
+         /* Culling is later than XFB in Vulkan. Emit the original payload for
+          * every vertex, but move culled raster positions outside the clip
+          * volume. The XFB-only position varying remains untouched.
+          */
+         nir_def *position = nir_load_var(b, out[i]);
+         nir_def *clipped = nir_vec4(b, nir_imm_float(b, 0), nir_imm_float(b, 0),
+                                     nir_imm_float(b, 2), nir_imm_float(b, 1));
+         nir_store_var(b, out[i], nir_bcsel(b, cull_pass, position, clipped), 0xf);
+      }
    }
    nir_store_var(b, front_facing_var, front_facing, 0x1);
    nir_emit_vertex(b, 0);
@@ -1021,5 +1300,10 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
    nir_validate_shader(nir, "in dzn_nir_polygon_point_mode_gs");
 
    NIR_PASS(_, nir, nir_lower_var_copies);
+   if (previous_shader->xfb_info) {
+      const size_t size = nir_xfb_info_size(previous_shader->xfb_info->output_count);
+      nir->xfb_info = ralloc_size(nir, size);
+      memcpy(nir->xfb_info, previous_shader->xfb_info, size);
+   }
    return b->shader;
 }

@@ -31,6 +31,7 @@
 #include "spirv_to_dxil.h"
 
 #include "dxil_validator.h"
+#include "nir_xfb_info.h"
 
 #include "vk_alloc.h"
 #include "vk_util.h"
@@ -212,6 +213,7 @@ to_dxil_shader_stage(VkShaderStageFlagBits in)
 }
 
 struct dzn_nir_options {
+   struct vk_pipeline_robustness_state robustness;
    enum dxil_spirv_yz_flip_mode yz_flip_mode;
    uint16_t y_flip_mask, z_flip_mask;
    bool force_sample_rate_shading;
@@ -288,6 +290,9 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
    if (result != VK_SUCCESS)
       return result;
 
+   if (!dzn_nir_preserve_xfb_position(*nir))
+      return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+
    /* Apply the clip-volume conversion before shared DXIL passes apply any
     * viewport-driven Z reversal to the last rasterization stage.
     */
@@ -297,8 +302,8 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
    /* D3D12 does not guarantee Vulkan's out-of-bounds storage-image behavior.
     * Rewrite image accesses to check the descriptor view dimensions in NIR.
     */
-   if (device->vk.enabled_features.robustImageAccess ||
-       device->vk.enabled_features.robustImageAccess2)
+   if (options->robustness.images == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_EXT ||
+       options->robustness.images == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT)
       NIR_PASS(_, *nir, nir_lower_robust_access,
                dzn_robust_image_access_intrinsic_filter, NULL);
 
@@ -846,6 +851,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       uint8_t nir_hash[BLAKE3_KEY_LEN];
       uint8_t link_hashes[BLAKE3_KEY_LEN][2];
    } stages[MESA_VULKAN_SHADER_STAGES] = { 0 };
+   struct vk_pipeline_robustness_state robustness[MESA_VULKAN_SHADER_STAGES] = { 0 };
    const uint8_t *dxil_hashes[MESA_VULKAN_SHADER_STAGES] = { 0 };
    uint8_t attribs_hash[BLAKE3_KEY_LEN];
    uint8_t pipeline_hash[BLAKE3_KEY_LEN];
@@ -880,6 +886,9 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       }
 
       stages[(unsigned)stage].info = &info->pStages[i];
+      vk_pipeline_robustness_state_fill(&device->vk.robustness_state,
+                                       &robustness[stage], info->pNext,
+                                       info->pStages[i].pNext);
       active_stage_mask |= BITFIELD_BIT(stage);
    }
 
@@ -889,6 +898,17 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       !(active_stage_mask & (1 << MESA_SHADER_GEOMETRY));
    if (pipeline->use_gs_for_polygon_mode_point)
       last_raster_stage = MESA_SHADER_GEOMETRY;
+   pipeline->use_gs_for_provoking_vertex = pipeline->provoking_vertex_last &&
+      !pipeline->use_gs_for_polygon_mode_point &&
+      !(active_stage_mask & BITFIELD_BIT(MESA_SHADER_GEOMETRY)) &&
+      (active_stage_mask & BITFIELD_BIT(MESA_SHADER_FRAGMENT)) &&
+      info->pInputAssemblyState->topology != VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+   if (pipeline->use_gs_for_provoking_vertex)
+      last_raster_stage = MESA_SHADER_GEOMETRY;
+   const uint32_t provoking_compile_key = 0x50560001u ^
+      ((uint32_t)pipeline->provoking_vertex_last << 24) ^
+      ((uint32_t)device->vk.enabled_features.provokingVertexLast << 25) ^
+      ((uint32_t)info->pInputAssemblyState->topology << 16);
 
    enum dxil_spirv_yz_flip_mode yz_flip_mode = DXIL_SPIRV_YZ_FLIP_NONE;
    uint16_t y_flip_mask = 0, z_flip_mask = 0;
@@ -936,6 +956,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       _mesa_blake3_update(&pipeline_hash_ctx, &force_sample_rate_shading, sizeof(force_sample_rate_shading));
       _mesa_blake3_update(&pipeline_hash_ctx, &lower_view_index, sizeof(lower_view_index));
       _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
+      _mesa_blake3_update(&pipeline_hash_ctx, &provoking_compile_key, sizeof(provoking_compile_key));
 
       u_foreach_bit(stage, active_stage_mask) {
          const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_size_info =
@@ -943,7 +964,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
             vk_find_struct_const(stages[stage].info->pNext, PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO);
          uint8_t subgroup_size = subgroup_size_info ? subgroup_size_info->requiredSubgroupSize : 0;
 
-         vk_pipeline_hash_shader_stage(pipeline->base.flags, stages[stage].info, NULL, stages[stage].spirv_hash);
+         vk_pipeline_hash_shader_stage(pipeline->base.flags, stages[stage].info, &robustness[stage], stages[stage].spirv_hash);
          _mesa_blake3_update(&pipeline_hash_ctx, &subgroup_size, sizeof(subgroup_size));
          _mesa_blake3_update(&pipeline_hash_ctx, stages[stage].spirv_hash, sizeof(stages[stage].spirv_hash));
          _mesa_blake3_update(&pipeline_hash_ctx, layout->stages[stage].hash, sizeof(layout->stages[stage].hash));
@@ -996,6 +1017,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       }
 
       struct dzn_nir_options options = {
+         .robustness = robustness[stage],
          .yz_flip_mode = stage == last_raster_stage ? yz_flip_mode : DXIL_SPIRV_YZ_FLIP_NONE,
          .y_flip_mask = y_flip_mask,
          .z_flip_mask = z_flip_mask,
@@ -1022,7 +1044,11 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
          pipeline->needs_draw_sysvals = metadata.needs_draw_sysvals;
    }
 
-   if (pipeline->use_gs_for_polygon_mode_point) {
+   if (pipeline->use_gs_for_polygon_mode_point || pipeline->use_gs_for_provoking_vertex) {
+      nir_shader *previous = pipeline->templates.shaders[MESA_SHADER_VERTEX].nir;
+      nir_shader *fragment = pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir;
+      if (fragment)
+         dxil_nir_propagate_interp_to_outputs(previous, fragment);
       /* TODO: Cache; handle TES */
       struct dzn_nir_point_gs_info gs_info = {
          .cull_mode = info->pRasterizationState->cullMode,
@@ -1042,8 +1068,13 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
          }
       };
       pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir =
-         dzn_nir_polygon_point_mode_gs(pipeline->templates.shaders[MESA_SHADER_VERTEX].nir,
-                                       &gs_info);
+         pipeline->use_gs_for_polygon_mode_point ?
+         dzn_nir_polygon_point_mode_gs(previous, &gs_info) :
+         dzn_nir_provoking_vertex_gs(previous,
+            to_prim_topology_type(info->pInputAssemblyState->topology) == D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE ?
+               MESA_PRIM_LINES : MESA_PRIM_TRIANGLES,
+            DZN_REGISTER_SPACE_SYSVALS,
+            fragment && (fragment->info.inputs_read & VARYING_BIT_PRIMITIVE_ID));
 
       if (depth_clip_negative_one_to_one)
          NIR_PASS(_, pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir,
@@ -1068,7 +1099,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       active_stage_mask |= (1 << MESA_SHADER_GEOMETRY);
       memcpy(stages[MESA_SHADER_GEOMETRY].spirv_hash, stages[MESA_SHADER_VERTEX].spirv_hash, BLAKE3_KEY_LEN);
 
-      if ((active_stage_mask & (1 << MESA_SHADER_FRAGMENT)) &&
+      if (pipeline->use_gs_for_polygon_mode_point &&
+          (active_stage_mask & (1 << MESA_SHADER_FRAGMENT)) &&
           BITSET_TEST(pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir->info.system_values_read, SYSTEM_VALUE_FRONT_FACE))
          NIR_PASS(_, pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir, dxil_nir_forward_front_face);
    }
@@ -1101,6 +1133,12 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       }
    }
 
+   if (pipeline->provoking_vertex_last && !pipeline->use_gs_for_provoking_vertex &&
+       !pipeline->use_gs_for_polygon_mode_point &&
+       pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir)
+      NIR_PASS(_, pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir,
+               dzn_nir_lower_last_provoking_vertex);
+
    u_foreach_bit(stage, active_stage_mask) {
       uint8_t bindings_hash[BLAKE3_KEY_LEN];
 
@@ -1111,6 +1149,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
          blake3_hasher dxil_hash_ctx;
 
          _mesa_blake3_init(&dxil_hash_ctx);
+         _mesa_blake3_update(&dxil_hash_ctx, &provoking_compile_key, sizeof(provoking_compile_key));
          _mesa_blake3_update(&dxil_hash_ctx, stages[stage].nir_hash, sizeof(stages[stage].nir_hash));
          _mesa_blake3_update(&dxil_hash_ctx, stages[stage].spirv_hash, sizeof(stages[stage].spirv_hash));
          _mesa_blake3_update(&dxil_hash_ctx, stages[stage].link_hashes[0], sizeof(stages[stage].link_hashes[0]));
@@ -1217,6 +1256,70 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
 
       if (cache)
          dzn_pipeline_cache_add_dxil_shader(cache, stages[stage].dxil_hash, stage, slot);
+   }
+
+   /* Stream-output declarations must refer to the final linked DXIL output
+    * signatures. Keep them pipeline-owned, never backed by temporary NIR. */
+   nir_shader *last_nir = pipeline->templates.shaders[last_raster_stage].nir;
+   if (last_nir && last_nir->xfb_info && last_nir->xfb_info->output_count) {
+      const nir_xfb_info *xfb = last_nir->xfb_info;
+      uint32_t next_offset[D3D12_SO_BUFFER_SLOT_COUNT] = {0};
+      uint32_t count = 0;
+      for (uint32_t i = 0; i < xfb->output_count; i++) {
+         const nir_xfb_output_info *output = &xfb->outputs[i];
+         uint32_t buffer = output->buffer;
+         if (xfb->buffer_to_stream[buffer] != 0 || output->data_is_16bit ||
+             output->offset < next_offset[buffer])
+            return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+         while (next_offset[buffer] < output->offset) {
+            uint32_t gap = MIN2((output->offset - next_offset[buffer]) / 4, 4);
+            if (!gap || count >= ARRAY_SIZE(pipeline->so_entries))
+               return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+            pipeline->so_entries[count++] = (D3D12_SO_DECLARATION_ENTRY) {
+               .Stream = 0, .ComponentCount = gap, .OutputSlot = buffer,
+            };
+            next_offset[buffer] += gap * 4;
+         }
+         nir_variable *var = NULL;
+         nir_foreach_shader_out_variable(candidate, last_nir) {
+            if (candidate->data.location == output->location &&
+                candidate->data.location_frac <= output->component_offset) {
+               var = candidate;
+               break;
+            }
+         }
+         if (!var || count >= ARRAY_SIZE(pipeline->so_entries))
+            return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+         const char *semantic = "TEXCOORD";
+         uint32_t index = var->data.driver_location;
+         switch (var->data.location) {
+         case VARYING_SLOT_POS: semantic = "SV_Position"; index = 0; break;
+         case VARYING_SLOT_CLIP_DIST0: semantic = "SV_ClipDistance"; index = 0; break;
+         case VARYING_SLOT_CLIP_DIST1: semantic = "SV_ClipDistance"; index = 1; break;
+         case VARYING_SLOT_PRIMITIVE_ID: semantic = "SV_PrimitiveID"; index = 0; break;
+         case VARYING_SLOT_LAYER: semantic = "SV_RenderTargetArrayIndex"; index = 0; break;
+         case VARYING_SLOT_VIEWPORT: semantic = "SV_ViewportArrayIndex"; index = 0; break;
+         default: break;
+         }
+         uint32_t components = util_bitcount(output->component_mask);
+         pipeline->so_entries[count++] = (D3D12_SO_DECLARATION_ENTRY) {
+            .Stream = 0, .SemanticName = semantic, .SemanticIndex = index,
+            .StartComponent = output->component_offset - var->data.location_frac,
+            .ComponentCount = components, .OutputSlot = buffer,
+         };
+         next_offset[buffer] += components * 4;
+      }
+      for (uint32_t i = 0; i < D3D12_SO_BUFFER_SLOT_COUNT; i++)
+         pipeline->so_strides[i] = xfb->buffers[i].stride;
+      d3d12_gfx_pipeline_state_stream_new_desc(out, STREAM_OUTPUT, D3D12_STREAM_OUTPUT_DESC, so);
+      pipeline->templates.desc_offsets.so =
+         (uintptr_t)so - (uintptr_t)out->pPipelineStateSubobjectStream;
+      so->pSODeclaration = pipeline->so_entries;
+      so->NumEntries = count;
+      so->pBufferStrides = pipeline->so_strides;
+      so->NumStrides = D3D12_SO_BUFFER_SLOT_COUNT;
+      so->RasterizedStream = info->pRasterizationState->rasterizerDiscardEnable ?
+         D3D12_SO_NO_RASTERIZED_STREAM : 0;
    }
 
    if (cache)
@@ -1390,10 +1493,12 @@ dzn_graphics_pipeline_translate_ia(struct dzn_device *device,
    pipeline->templates.desc_offsets.topology =
       (uintptr_t)prim_top_type - (uintptr_t)out->pPipelineStateSubobjectStream;
    *prim_top_type = to_prim_topology_type(in_ia->topology);
-   pipeline->ia.triangle_fan = in_ia->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN && !pdev->options15.TriangleFanSupported;
+   const bool native_fan = pdev->options15.TriangleFanSupported &&
+                           !device->vk.enabled_features.provokingVertexLast;
+   pipeline->ia.triangle_fan = in_ia->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN && !native_fan;
    pipeline->ia.topology =
       to_prim_topology(in_ia->topology, in_tes ? in_tes->patchControlPoints : 0,
-                       pdev->options15.TriangleFanSupported);
+                       native_fan);
    pipeline->patch_control_points = in_tes ? in_tes->patchControlPoints : 0;
 
    if (in_ia->primitiveRestartEnable ||
@@ -1415,7 +1520,8 @@ dzn_graphics_pipeline_topology(const struct dzn_graphics_pipeline *pipeline,
    struct dzn_physical_device *pdev = container_of(
       pipeline->base.device->vk.physical, struct dzn_physical_device, vk);
    return to_prim_topology(topology, pipeline->patch_control_points,
-                           pdev->options15.TriangleFanSupported);
+                           pdev->options15.TriangleFanSupported &&
+                           !pipeline->base.device->vk.enabled_features.provokingVertexLast);
 }
 
 static D3D12_FILL_MODE
@@ -2041,6 +2147,21 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
    VkFormat zs_fmt = VK_FORMAT_UNDEFINED;
    VkResult ret;
    HRESULT hres = 0;
+   const VkPipelineRasterizationProvokingVertexStateCreateInfoEXT *provoking =
+      pCreateInfo->pRasterizationState ? vk_find_struct_const(
+         pCreateInfo->pRasterizationState->pNext,
+         PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT) : NULL;
+   if (provoking && provoking->provokingVertexMode != VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT &&
+       provoking->provokingVertexMode != VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT)
+      return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
+   const VkDepthBiasRepresentationInfoEXT *bias_representation =
+      pCreateInfo->pRasterizationState ? vk_find_struct_const(
+         pCreateInfo->pRasterizationState->pNext, DEPTH_BIAS_REPRESENTATION_INFO_EXT) : NULL;
+   if (bias_representation &&
+       (bias_representation->depthBiasRepresentation !=
+        VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT ||
+        bias_representation->depthBiasExact))
+      return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
    D3D12_VIEW_INSTANCE_LOCATION vi_locs[D3D12_MAX_VIEW_INSTANCE_COUNT];
 
    struct dzn_graphics_pipeline *pipeline =
@@ -2048,6 +2169,8 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
                  VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (!pipeline)
       return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+   pipeline->provoking_vertex_last = provoking &&
+      provoking->provokingVertexMode == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
 
    D3D12_PIPELINE_STATE_STREAM_DESC *stream_desc = &pipeline->templates.stream_desc;
    stream_desc->pPipelineStateSubobjectStream = pipeline->templates.stream_buf;
@@ -2227,6 +2350,8 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
       /* Cached old pipeline blobs do not contain late vertex-input metadata. */
       pcache = NULL;
    }
+   if (device->vk.enabled_features.transformFeedback)
+      pcache = NULL;
 
    ret = dzn_graphics_pipeline_translate_ia(device, pipeline, stream_desc, pCreateInfo);
    if (ret)
@@ -2730,6 +2855,10 @@ dzn_graphics_pipeline_get_state_locked(struct dzn_graphics_pipeline *pipeline,
          if (ps)
             *ps = (D3D12_SHADER_BYTECODE){0};
       }
+      D3D12_STREAM_OUTPUT_DESC *so =
+         dzn_graphics_pipeline_get_desc(pipeline, stream_buf, so);
+      if (so && (dyn & DZN_DYNAMIC_DISCARD))
+         so->RasterizedStream = extended->discard ? D3D12_SO_NO_RASTERIZED_STREAM : 0;
 
       if (dyn) {
          if (pdev->options14.IndependentFrontAndBackStencilRefMaskSupported) {
@@ -3136,11 +3265,15 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
    VkResult ret = VK_SUCCESS;
    nir_shader *nir = NULL;
 
+   struct vk_pipeline_robustness_state robustness;
+   vk_pipeline_robustness_state_fill(&device->vk.robustness_state, &robustness,
+                                    info->pNext, info->stage.pNext);
+
    if (cache) {
       blake3_hasher pipeline_hash_ctx;
 
       _mesa_blake3_init(&pipeline_hash_ctx);
-      vk_pipeline_hash_shader_stage(pipeline->base.flags, &info->stage, NULL, spirv_hash);
+      vk_pipeline_hash_shader_stage(pipeline->base.flags, &info->stage, &robustness, spirv_hash);
       _mesa_blake3_update(&pipeline_hash_ctx, &device->bindless, sizeof(device->bindless));
       _mesa_blake3_update(&pipeline_hash_ctx, spirv_hash, sizeof(spirv_hash));
       _mesa_blake3_update(&pipeline_hash_ctx, layout->stages[MESA_SHADER_COMPUTE].hash,
@@ -3172,6 +3305,7 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
    const unsigned supported_bit_sizes = 16 | 32 | 64;
    dxil_get_nir_compiler_options(&nir_opts, dzn_get_shader_model(pdev), supported_bit_sizes, supported_bit_sizes);
    struct dzn_nir_options options = {
+      .robustness = robustness,
       .nir_opts = &nir_opts,
    };
    struct dxil_spirv_metadata metadata = { 0 };

@@ -977,6 +977,32 @@ dzn_GetImageSubresourceLayout(VkDevice _device,
    }
 }
 
+VKAPI_ATTR void VKAPI_CALL
+dzn_GetImageSubresourceLayout2KHR(VkDevice device, VkImage image,
+                                 const VkImageSubresource2KHR *subresource,
+                                 VkSubresourceLayout2KHR *layout)
+{
+   dzn_GetImageSubresourceLayout(device, image, &subresource->imageSubresource,
+                                  &layout->subresourceLayout);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+dzn_GetDeviceImageSubresourceLayoutKHR(VkDevice _device,
+                                      const VkDeviceImageSubresourceInfoKHR *info,
+                                      VkSubresourceLayout2KHR *layout)
+{
+   VK_FROM_HANDLE(dzn_device, device, _device);
+   VkImage image;
+   VkResult result = dzn_image_create(device, info->pCreateInfo, NULL, &image);
+   if (result != VK_SUCCESS) {
+      memset(&layout->subresourceLayout, 0, sizeof(layout->subresourceLayout));
+      vk_error(device, result);
+      return;
+   }
+   dzn_GetImageSubresourceLayout2KHR(_device, image, info->pSubresource, layout);
+   dzn_image_destroy(dzn_image_from_handle(image), NULL);
+}
+
 static D3D12_SHADER_COMPONENT_MAPPING
 translate_swizzle(VkComponentSwizzle in, uint32_t comp)
 {
@@ -1121,6 +1147,13 @@ dzn_image_view_prepare_srv_desc(struct dzn_image_view *iview)
 
          for (uint32_t i = 0; i < ARRAY_SIZE(swz); i++)
             swz[i] = bgra4_remap[swz[i]];
+      }
+   } else if (iview->vk.format == VK_FORMAT_A1B5G5R5_UNORM_PACK16_KHR) {
+      for (uint32_t i = 0; i < ARRAY_SIZE(swz); i++) {
+         if (swz[i] == D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0)
+            swz[i] = D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_2;
+         else if (swz[i] == D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_2)
+            swz[i] = D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0;
       }
    } else if (iview->vk.aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
       /* D3D puts stencil in G, not R. Requests for R should be routed to G and vice versa. */
@@ -1584,7 +1617,10 @@ dzn_buffer_view_create(struct dzn_device *device,
 
    bview->buffer = buf;
    bview->srv_bindless_slot = bview->uav_bindless_slot = -1;
-   if (buf->usage &
+   const VkBufferUsageFlags2CreateInfoKHR *usage2 =
+      vk_find_struct_const(pCreateInfo->pNext, BUFFER_USAGE_FLAGS_2_CREATE_INFO_KHR);
+   VkBufferUsageFlags2KHR usage = usage2 ? usage2->usage : buf->usage;
+   if (usage &
        (VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
         VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)) {
       bview->srv_desc = (D3D12_SHADER_RESOURCE_VIEW_DESC) {
@@ -1610,7 +1646,7 @@ dzn_buffer_view_create(struct dzn_device *device,
       }
    }
 
-   if (buf->usage & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) {
+   if (usage & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT) {
       bview->uav_desc = (D3D12_UNORDERED_ACCESS_VIEW_DESC) {
          .Format = dzn_buffer_get_dxgi_format(pCreateInfo->format),
          .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,

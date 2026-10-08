@@ -39,6 +39,7 @@ static const struct spirv_capabilities
 spirv_caps = {
    .Shader = true,
    .Geometry = true,
+   .TransformFeedback = true,
    /* Vulkan 1.2 feature-gated system-value outputs. */
    .ShaderLayer = true,
    .ShaderViewportIndex = true,
@@ -64,6 +65,9 @@ spirv_caps = {
    .Int16 = true,
    /* 8-bit ALU is widened by nir_lower_bit_size before DXIL emission. */
    .Int8 = true,
+   .WorkgroupMemoryExplicitLayoutKHR = true,
+   .WorkgroupMemoryExplicitLayout8BitAccessKHR = true,
+   .WorkgroupMemoryExplicitLayout16BitAccessKHR = true,
    .StorageBuffer8BitAccess = true,
    .UniformAndStorageBuffer8BitAccess = true,
    .StoragePushConstant8 = true,

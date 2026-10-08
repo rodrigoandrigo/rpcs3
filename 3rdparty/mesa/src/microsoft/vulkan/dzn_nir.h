@@ -93,7 +93,7 @@ nir_shader *
 dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size);
 
 nir_shader *
-dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size);
+dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size, bool strip);
 
 enum dzn_blit_resolve_mode {
    dzn_blit_resolve_none,
@@ -143,6 +143,12 @@ struct dzn_nir_point_gs_info {
       uint32_t base_shader_register;
    } runtime_data_cbv;
 };
+bool dzn_nir_preserve_xfb_position(nir_shader *nir);
+nir_shader *dzn_nir_provoking_vertex_gs(const nir_shader *previous,
+                                     enum mesa_prim primitive, unsigned register_space,
+                                     bool primitive_id);
+bool dzn_nir_lower_last_provoking_vertex(nir_shader *nir);
+
 nir_shader *
 dzn_nir_polygon_point_mode_gs(const nir_shader *vs, struct dzn_nir_point_gs_info *info);
 

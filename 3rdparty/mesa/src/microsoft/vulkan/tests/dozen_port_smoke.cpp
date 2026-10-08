@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
+#include <dcomp.h>
 #include <vulkan/vulkan.h>
 #include <iostream>
 #include <vector>
@@ -82,7 +83,13 @@ int wmain(int argc, wchar_t** argv)
          return static_cast<int>(code);
       }
       bool bounded=argc==5 && !std::wcscmp(argv[1], L"--bounded");
-      bool seven=argc==5 && !std::wcscmp(argv[1], L"--seven");
+      bool four_core=argc==5 && !std::wcscmp(argv[1], L"--four-core");
+      bool present_probe=argc==5 && !std::wcscmp(argv[1], L"--present");
+      bool contracts_probe=argc==5 && !std::wcscmp(argv[1], L"--contracts");
+      bool provoking_probe=argc==5 && !std::wcscmp(argv[1], L"--provoking");
+      bool six_core=argc==5 && !std::wcscmp(argv[1], L"--six-core");
+      bool six=six_core || (argc==5 && !std::wcscmp(argv[1], L"--six"));
+      bool seven=provoking_probe || contracts_probe || present_probe || four_core || six || (argc==5 && !std::wcscmp(argv[1], L"--seven"));
       if (bounded) {++argv; --argc;}
       if (seven) {++argv; --argc;}
       AddVectoredExceptionHandler(1, report_fault);
@@ -183,7 +190,17 @@ int wmain(int argc, wchar_t** argv)
       VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT vertex_input{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT};
       VkPhysicalDevice4444FormatsFeaturesEXT formats4444{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT};
       VkPhysicalDevicePresentIdFeaturesKHR present_id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
+      VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR explicit_layout{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_FEATURES_KHR};
+      VkPhysicalDeviceShaderFloat16Int8Features small_types{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES};
+      VkPhysicalDeviceConditionalRenderingFeaturesEXT conditional{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT};
+      VkPhysicalDeviceTransformFeedbackFeaturesEXT xfb{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT};
+      VkPhysicalDevicePresentWaitFeaturesKHR present_wait{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
+      VkPhysicalDeviceProvokingVertexFeaturesEXT provoking{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT};
+      VkPhysicalDevicePipelineRobustnessFeaturesEXT pipeline_robustness{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_FEATURES_EXT};
+      VkPhysicalDeviceDepthBiasControlFeaturesEXT depth_bias{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_BIAS_CONTROL_FEATURES_EXT};
       VkPhysicalDeviceFeatures graphics_features{};
+      VkPhysicalDeviceMaintenance5FeaturesKHR maintenance5{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR};
+      VkPhysicalDeviceIndexTypeUint8FeaturesKHR uint8_indices{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES_KHR};
       if (seven) {
          VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; query.pNext=&formats4444;
          vkGetPhysicalDeviceFeatures2(physical,&query);
@@ -194,12 +211,45 @@ int wmain(int argc, wchar_t** argv)
          dynamic2.extendedDynamicState2=VK_TRUE; vertex_input.vertexInputDynamicState=VK_TRUE;
          zero.pNext=&dynamic1; dynamic1.pNext=&dynamic2; dynamic2.pNext=&vertex_input;
          vertex_input.pNext=&formats4444; formats4444.pNext=&present_id; present_id.presentId=VK_TRUE;
+         if(six) {
+            query.pNext=&small_types; vkGetPhysicalDeviceFeatures2(physical,&query);
+            if(!small_types.shaderFloat16 || !query.features.shaderInt16)
+               throw std::runtime_error("--six compute fixture requires native Float16 and Int16 on this adapter");
+            graphics_features.shaderInt16=VK_TRUE;
+            small_types.shaderInt8=VK_TRUE;
+            explicit_layout.workgroupMemoryExplicitLayout=VK_TRUE;
+            explicit_layout.workgroupMemoryExplicitLayoutScalarBlockLayout=VK_TRUE;
+            explicit_layout.workgroupMemoryExplicitLayout8BitAccess=VK_TRUE;
+            explicit_layout.workgroupMemoryExplicitLayout16BitAccess=VK_TRUE;
+            conditional.conditionalRendering=VK_TRUE; xfb.transformFeedback=!six_core;
+            present_wait.presentWait=!six_core;
+            present_id.pNext=&explicit_layout; explicit_layout.pNext=&small_types;
+            small_types.pNext=&conditional; conditional.pNext=&xfb; xfb.pNext=&present_wait;
+            present_wait.pNext=&provoking;
+         }
       }
       if (bounded) {
          if (!robustness.robustBufferAccess2) throw std::runtime_error("Bounded test requires robustBufferAccess2");
          robustness.pNext=nullptr; zero.pNext=&robustness;
       }
-      std::cout << "Descriptor path: " << (bounded ? "bounded robustness2" : "bindless") << '\n';
+      if(four_core) {
+         if(!robustness.robustBufferAccess2) throw std::runtime_error("Per-pipeline bounds probe requires robustness2 support");
+         pipeline_robustness.pipelineRobustness=VK_TRUE; depth_bias.depthBiasControl=VK_TRUE;
+         present_id.pNext=&pipeline_robustness; pipeline_robustness.pNext=&depth_bias;
+      }
+      if(present_probe) {
+         present_wait.presentWait=VK_TRUE;
+         present_id.pNext=&present_wait;
+      }
+      if(contracts_probe) {
+         maintenance5.maintenance5=VK_TRUE; uint8_indices.indexTypeUint8=VK_TRUE;
+         present_id.pNext=&maintenance5; maintenance5.pNext=&uint8_indices;
+      }
+      if(provoking_probe) {
+         provoking.provokingVertexLast=VK_TRUE;
+         present_id.pNext=&provoking;
+      }
+      std::cout << "Descriptor path: " << (four_core ? "bounded per-pipeline robustness2" : (bounded ? "bounded robustness2" : "bindless")) << '\n';
       VkDevice device{}; check(vkCreateDevice(physical, &dci, nullptr, &device), "device/all advertised extensions");
 #define DEVICE_FN(name) auto name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device, #name)); if (!name) throw std::runtime_error(#name " missing")
       DEVICE_FN(vkGetDeviceQueue); DEVICE_FN(vkCreateBuffer); DEVICE_FN(vkGetBufferMemoryRequirements);
@@ -217,9 +267,9 @@ int wmain(int argc, wchar_t** argv)
       VkQueue queue{}; vkGetDeviceQueue(device, family, 0, &queue);
       if (seven)
          dozen_seven_smoke(instance, physical, device, queue, family, get, vkGetDeviceProcAddr,
-                           std::filesystem::path(argv[3]).parent_path(), extended1, conservative, formats4444.formatA4B4G4R4);
+                           std::filesystem::path(argv[3]).parent_path(), extended1, conservative, formats4444.formatA4B4G4R4, six, !six_core, four_core, contracts_probe, provoking_probe);
       if (seven)
-         dozen_seven_wsi_smoke(instance, physical, device, queue, family, get, vkGetDeviceProcAddr, module);
+         dozen_seven_wsi_smoke(instance, physical, device, queue, family, get, vkGetDeviceProcAddr, module, present_probe || (six && !six_core));
       VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
       bci.size=4096; bci.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
       VkBuffer buffer{}; check(vkCreateBuffer(device, &bci, nullptr, &buffer), "buffer");
@@ -250,6 +300,14 @@ int wmain(int argc, wchar_t** argv)
       VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
       cpi.stage.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; cpi.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;
       cpi.stage.module=shader; cpi.stage.pName="main"; cpi.layout=pipeline_layout;
+      VkPipelineRobustnessCreateInfoEXT pipeline_behavior{VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO_EXT};
+      VkPipelineRobustnessCreateInfoEXT stage_behavior{VK_STRUCTURE_TYPE_PIPELINE_ROBUSTNESS_CREATE_INFO_EXT};
+      if(four_core) {
+         pipeline_behavior.storageBuffers=VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT;
+         stage_behavior.storageBuffers=VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2_EXT;
+         stage_behavior.images=VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_EXT;
+         cpi.pNext=&pipeline_behavior; cpi.stage.pNext=&stage_behavior;
+      }
       VkPipeline pipeline{}; check(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr, &pipeline), "SPIR-V to DXIL/compute pipeline");
       VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO}; pci.queueFamilyIndex=family;
       VkCommandPool pool{}; check(vkCreateCommandPool(device, &pci, nullptr, &pool), "pool");
@@ -268,7 +326,7 @@ int wmain(int argc, wchar_t** argv)
       vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
       // In bounded mode, half of the invocations write beyond the descriptor
       // range but remain inside the allocation. They must preserve the sentinel.
-      VkDescriptorBufferInfo dbi{buffer, 0, bounded ? 2048u : 4096u};
+      VkDescriptorBufferInfo dbi{buffer, 0, (bounded || four_core) ? 2048u : 4096u};
       VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; write.dstBinding=0;
       write.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; write.descriptorCount=1; write.pBufferInfo=&dbi;
       vkCmdPushDescriptorSetKHR(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &write);
@@ -288,7 +346,7 @@ int wmain(int argc, wchar_t** argv)
       VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory=allocation; range.size=VK_WHOLE_SIZE;
       check(vkInvalidateMappedMemoryRanges(device, 1, &range), "invalidate");
       for (unsigned i=0; i<1024; ++i)
-         if (static_cast<const uint32_t*>(mapped)[i]!=(bounded && i>=512 ? 0x137fabcdu : 0x24680000u+i))
+         if (static_cast<const uint32_t*>(mapped)[i]!=((bounded || four_core) && i>=512 ? 0x137fabcdu : 0x24680000u+i))
             throw std::runtime_error("Compute/push descriptor/workgroup/bounds mismatch at " + std::to_string(i));
       vkUnmapMemory(device, allocation);
       if (calibrated) {

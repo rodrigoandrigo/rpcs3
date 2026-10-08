@@ -1,6 +1,6 @@
 # Base de implementação Vulkan do Dozen — Mesa 26.2.2
 
-A base registra **133 extensões pendentes** sem anunciá-las. Ela converte os requisitos do `vk.xml` em contratos de trabalho verificáveis; não representa suporte runtime.
+A base registra **125 extensões pendentes** sem anunciá-las. Ela converte os requisitos do `vk.xml` em contratos de trabalho verificáveis; não representa suporte runtime.
 
 ## Camadas reutilizáveis
 
@@ -15,17 +15,17 @@ A base registra **133 extensões pendentes** sem anunciá-las. Ela converte os r
 
 ## Cobertura do scaffold
 
-- Candidatas revisadas: 175
-- Implementadas na matriz: 42
-- Pendentes com checklist por extensão: 133
+- Candidatas revisadas: 177
+- Implementadas na matriz: 52
+- Pendentes com checklist por extensão: 125
 - Pendentes que aparecem anunciadas na fonte: 0
 - Extensões não encontradas no `vk.xml`: 0
 
 ## Bloqueios registrados
 
 - `feature_and_zero_one_semantics_unimplemented`: 1
-- `feature_not_reported`: 63
-- `missing_backend_commands`: 51
+- `feature_not_reported`: 59
+- `missing_backend_commands`: 47
 - `unhandled_type_or_semantics`: 17
 - `unsupported_stub_and_feature_false`: 1
 
@@ -72,4 +72,13 @@ A matriz fixa passa a **29 implementadas e 142 pendentes**, com zero pendentes a
 Dozen anuncia `VK_EXT_shader_uniform_buffer_unsized_array` e reporta `shaderUniformBufferUnsizedArray=true`. O frontend SPIR-V existente representa `OpTypeRuntimeArray` como array sem tamanho em NIR; o caminho UBO do compilador gera acessos `dx.op.cbufferLoadLegacy` com offsets dinâmicos. Um harness SPIR-V válido, com membro prefixo e array final de `vec4` indexado por `VertexIndex`, compilou para DXIL; o limite de uniform buffer permanece o limite D3D12 de 64 KiB. A consulta da estrutura de feature e sua habilitação usam o mecanismo pNext comum gerado a partir do `vk.xml`.
 
 A matriz fixa passa a **30 implementadas e 141 pendentes**, com zero pendentes anunciadas. Passaram seis testes focais novos, a suíte estática completa (**234 testes**), `compileall`, a auditoria do scaffold e build/link Linux do ICD. A faixa CBV é derivada do descritor e a root signature conserva bounds checks D3D12 para buffers. Não houve runtime Windows/D3D12 nem Vulkan CTS; não se reivindica conformidade CTS.
+
+# Provoking vertex refinement (2026-10-07)
+
+`VK_EXT_provoking_vertex` now supports FIRST and LAST modes; the previous
+FIRST-only restriction is superseded. Native FIRST/LAST rendering probes and
+cache reuse passed for lists, strips, fans, lines, point expansion, application
+GS, indexed indirect draws and primitive restart. See README.rpcs3-port.md for
+implementation, evidence and validation boundaries. The extension was already
+counted as implemented: this refinement does not change the 177/52/125 matrix.
 

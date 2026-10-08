@@ -68,7 +68,8 @@ class SevenExtensionsSupport(unittest.TestCase):
     def test_present_ids_track_accepted_presents_not_completion(self):
         self.assertIn("result == VK_SUCCESS && present_id", self.wsi)
         self.assertIn("chain->last_submitted_present_id = present_id", self.wsi)
-        self.assertNotRegex(self.device, r"\.KHR_present_wait\s*=\s*true")
+        self.assertRegex(self.device, r"\.KHR_present_wait\s*=\s*true")
+        self.assertIn("chain->completed_present_id >= present_id", self.wsi)
 
     def test_failed_variant_creation_returns_recording_error(self):
         self.assertIn("dynamic graphics PSO failed HRESULT", self.pipeline)

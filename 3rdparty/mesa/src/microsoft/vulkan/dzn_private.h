@@ -91,6 +91,9 @@ enum dzn_index_type {
    DZN_INDEX_4B,
    DZN_INDEX_2B_WITH_PRIM_RESTART,
    DZN_INDEX_4B_WITH_PRIM_RESTART,
+   DZN_INDEX_1B_CONVERT,
+   DZN_INDEX_2B_STRIP_RESTART,
+   DZN_INDEX_4B_STRIP_RESTART,
    DZN_NUM_INDEX_TYPE,
 };
 
@@ -124,10 +127,14 @@ dzn_index_size(enum dzn_index_type type)
    switch (type) {
    case DZN_NO_INDEX:
       return 0;
+   case DZN_INDEX_1B_CONVERT:
+      return 1;
    case DZN_INDEX_2B_WITH_PRIM_RESTART:
+   case DZN_INDEX_2B_STRIP_RESTART:
    case DZN_INDEX_2B:
       return 2;
    case DZN_INDEX_4B_WITH_PRIM_RESTART:
+   case DZN_INDEX_4B_STRIP_RESTART:
    case DZN_INDEX_4B:
       return 4;
    default: UNREACHABLE("Invalid index type");
@@ -659,6 +666,8 @@ struct dzn_cmd_buffer_state {
    } vb;
    struct {
       D3D12_INDEX_BUFFER_VIEW view;
+      struct dzn_buffer *uint8_buffer;
+      VkDeviceSize uint8_offset, uint8_size;
    } ib;
    struct {
       struct {
@@ -676,6 +685,18 @@ struct dzn_cmd_buffer_state {
    D3D12_VIEWPORT viewports[MAX_VP];
    D3D12_RECT scissors[MAX_SCISSOR];
    uint32_t viewport_count, scissor_count;
+   struct {
+      ID3D12Resource *buffer;
+      uint64_t offset;
+      D3D12_PREDICATION_OP op;
+   } conditional;
+   struct {
+      bool active;
+      struct dzn_buffer *buffers[D3D12_SO_BUFFER_SLOT_COUNT];
+      uint64_t offsets[D3D12_SO_BUFFER_SLOT_COUNT];
+      uint64_t sizes[D3D12_SO_BUFFER_SLOT_COUNT];
+      ID3D12Resource *counters[D3D12_SO_BUFFER_SLOT_COUNT];
+   } xfb;
    struct {
       struct dzn_cmd_buffer_push_constant_state gfx, compute;
    } push_constant;
@@ -1023,6 +1044,8 @@ struct dzn_graphics_pipeline {
    nir_shader_compiler_options dynamic_vs_options;
    uint32_t input_count;
    uint32_t input_locations[D3D12_VS_INPUT_REGISTER_COUNT];
+   D3D12_SO_DECLARATION_ENTRY so_entries[512];
+   uint32_t so_strides[D3D12_SO_BUFFER_SLOT_COUNT];
    struct {
       unsigned count;
       uint32_t strides[MAX_VBS];
@@ -1075,6 +1098,8 @@ struct dzn_graphics_pipeline {
 
    bool rast_disabled_from_missing_position;
    bool use_gs_for_polygon_mode_point;
+   bool use_gs_for_provoking_vertex;
+   bool provoking_vertex_last;
    bool needs_draw_sysvals;
 
    struct {
@@ -1090,7 +1115,7 @@ struct dzn_graphics_pipeline {
          uint32_t rast;
          uint32_t ds;
          uint32_t blend;
-         uint32_t ps, input_layout, topology;
+         uint32_t ps, input_layout, topology, so;
       } desc_offsets;
       D3D12_INPUT_ELEMENT_DESC inputs[D3D12_VS_INPUT_REGISTER_COUNT];
       struct {
@@ -1244,7 +1269,7 @@ struct dzn_buffer {
    ID3D12Resource *res;
 
    VkBufferCreateFlags create_flags;
-   VkBufferUsageFlags usage;
+   VkBufferUsageFlags2KHR usage;
    bool shared;
 
    D3D12_BARRIER_ACCESS valid_access;

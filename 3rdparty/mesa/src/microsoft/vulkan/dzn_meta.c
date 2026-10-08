@@ -260,13 +260,15 @@ dzn_meta_triangle_fan_rewrite_index_init(struct dzn_device *device,
    glsl_type_singleton_init_or_ref();
 
    uint8_t old_index_size = dzn_index_size(old_index_type);
+   bool strip = old_index_type == DZN_INDEX_2B_STRIP_RESTART ||
+                old_index_type == DZN_INDEX_4B_STRIP_RESTART;
    bool prim_restart =
       old_index_type == DZN_INDEX_2B_WITH_PRIM_RESTART ||
-      old_index_type == DZN_INDEX_4B_WITH_PRIM_RESTART;
+      old_index_type == DZN_INDEX_4B_WITH_PRIM_RESTART || strip;
 
    nir_shader *nir =
       prim_restart ?
-      dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(old_index_size) :
+      dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(old_index_size, strip) :
       dzn_nir_triangle_fan_rewrite_index_shader(old_index_size);
 
    uint32_t root_param_count = 0;
@@ -283,7 +285,7 @@ dzn_meta_triangle_fan_rewrite_index_init(struct dzn_device *device,
    };
 
    uint32_t params_size =
-      prim_restart ?
+      old_index_size == 1 ? 12 : prim_restart ?
       sizeof(struct dzn_triangle_fan_prim_restart_rewrite_index_params) :
       sizeof(struct dzn_triangle_fan_rewrite_index_params);
 
@@ -400,7 +402,7 @@ dzn_meta_triangle_fan_rewrite_index_init(struct dzn_device *device,
       goto out;
    }
 
-   if (FAILED(ID3D12Device1_CreateCommandSignature(device->dev, &cmd_sig_desc,
+   if (old_index_size != 1 && FAILED(ID3D12Device1_CreateCommandSignature(device->dev, &cmd_sig_desc,
                                                    meta->root_sig,
                                                    &IID_ID3D12CommandSignature,
                                                    (void **)&meta->cmd_sig)))
@@ -821,7 +823,8 @@ dzn_meta_init(struct dzn_device *device)
       struct dzn_indirect_draw_type type = { .value = i };
       if (type.triangle_fan_primitive_restart && !type.triangle_fan)
          continue;
-      if (type.triangle_fan && pdev->options15.TriangleFanSupported)
+      if (type.triangle_fan && pdev->options15.TriangleFanSupported &&
+          !device->vk.enabled_features.provokingVertexLast)
          continue;
       if (type.draw_params && pdev->options21.ExtendedCommandInfoSupported)
          continue;
@@ -832,12 +835,16 @@ dzn_meta_init(struct dzn_device *device)
          goto out;
    }
 
-   if (!pdev->options15.TriangleFanSupported) {
+   if (!pdev->options15.TriangleFanSupported || device->vk.enabled_features.provokingVertexLast) {
       for (uint32_t i = 0; i < ARRAY_SIZE(device->triangle_fan); i++) {
          result = dzn_meta_triangle_fan_rewrite_index_init(device, i);
          if (result != VK_SUCCESS)
             goto out;
       }
+   } else {
+      result = dzn_meta_triangle_fan_rewrite_index_init(device, DZN_INDEX_1B_CONVERT);
+      if (result != VK_SUCCESS)
+         goto out;
    }
 
 out:

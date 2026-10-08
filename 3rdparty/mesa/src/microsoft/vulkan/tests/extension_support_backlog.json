@@ -1,9 +1,19 @@
 {
   "schema_version": 1,
   "mesa_version": "26.2.2",
-  "reviewed_candidate_count": 175,
+  "reviewed_candidate_count": 177,
   "review_input_sha256": "152da9ded4d05e2b15539221406d42d15ef171b1687cc7958508ae038e93f3b2",
   "implemented_fields": [
+    "EXT_index_type_uint8",
+    "KHR_index_type_uint8",
+    "KHR_maintenance5",
+    "KHR_present_wait",
+    "EXT_pipeline_robustness",
+    "EXT_depth_bias_control",
+    "EXT_conditional_rendering",
+    "EXT_provoking_vertex",
+    "KHR_workgroup_memory_explicit_layout",
+    "KHR_shader_float16_int8",
     "EXT_4444_formats",
     "KHR_present_id",
     "KHR_swapchain_mutable_format",
@@ -183,32 +193,10 @@
       ]
     },
     {
-      "field": "EXT_conditional_rendering",
-      "extension": "VK_EXT_conditional_rendering",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: conditionalRendering; no complete Dozen backend handler for: vkCmdBeginConditionalRenderingEXT (common helper only), vkCmdEndConditionalRenderingEXT; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkCommandBufferInheritanceConditionalRenderingInfoEXT, VkConditionalRenderingBeginInfoEXT, VkConditionalRenderingFlagBitsEXT, VkConditionalRenderingFlagsEXT, VkPhysicalDeviceConditionalRenderingFeaturesEXT.",
-      "group_tags": [
-        "comandos",
-        "features",
-        "dependencias"
-      ]
-    },
-    {
       "field": "EXT_custom_resolve",
       "extension": "VK_EXT_custom_resolve",
       "decision_category": "missing_backend_commands",
       "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: customResolve; no complete Dozen backend handler for: vkCmdBeginCustomResolveEXT; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkBeginCustomResolveInfoEXT, VkCustomResolveCreateInfoEXT, VkPhysicalDeviceCustomResolveFeaturesEXT.",
-      "group_tags": [
-        "comandos",
-        "features",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "EXT_depth_bias_control",
-      "extension": "VK_EXT_depth_bias_control",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: depthBiasControl; no complete Dozen backend handler for: vkCmdSetDepthBias2EXT (common helper only); required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkDepthBiasInfoEXT, VkDepthBiasRepresentationEXT, VkDepthBiasRepresentationInfoEXT, VkPhysicalDeviceDepthBiasControlFeaturesEXT.",
       "group_tags": [
         "comandos",
         "features",
@@ -526,17 +514,6 @@
       ]
     },
     {
-      "field": "EXT_pipeline_robustness",
-      "extension": "VK_EXT_pipeline_robustness",
-      "decision_category": "feature_not_reported",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: pipelineRobustness; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDevicePipelineRobustnessFeaturesEXT, VkPhysicalDevicePipelineRobustnessPropertiesEXT, VkPipelineRobustnessBufferBehaviorEXT, VkPipelineRobustnessCreateInfoEXT, VkPipelineRobustnessImageBehaviorEXT.",
-      "group_tags": [
-        "features",
-        "promovida-ou-substituida",
-        "dependencias"
-      ]
-    },
-    {
       "field": "EXT_post_depth_coverage",
       "extension": "VK_EXT_post_depth_coverage",
       "decision_category": "unhandled_type_or_semantics",
@@ -583,16 +560,6 @@
       "extension": "VK_EXT_primitives_generated_query",
       "decision_category": "feature_not_reported",
       "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: primitivesGeneratedQuery; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT.",
-      "group_tags": [
-        "features",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "EXT_provoking_vertex",
-      "extension": "VK_EXT_provoking_vertex",
-      "decision_category": "feature_not_reported",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: provokingVertexLast; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDeviceProvokingVertexFeaturesEXT, VkPhysicalDeviceProvokingVertexPropertiesEXT, VkPipelineRasterizationProvokingVertexStateCreateInfoEXT, VkProvokingVertexModeEXT.",
       "group_tags": [
         "features",
         "dependencias"
@@ -686,7 +653,7 @@
       "field": "EXT_transform_feedback",
       "extension": "VK_EXT_transform_feedback",
       "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: transformFeedback; no complete Dozen backend handler for: vkCmdBeginQueryIndexedEXT, vkCmdBeginTransformFeedbackEXT (common helper only), vkCmdBindTransformFeedbackBuffersEXT (common helper only), vkCmdDrawIndirectByteCountEXT (common helper only), vkCmdEndQueryIndexedEXT, vkCmdEndTransformFeedbackEXT (common helper only); required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDeviceTransformFeedbackFeaturesEXT, VkPhysicalDeviceTransformFeedbackPropertiesEXT, VkPipelineRasterizationStateStreamCreateFlagsEXT, VkPipelineRasterizationStateStreamCreateInfoEXT.",
+      "decision_reason": "Nao anunciada: captura/resume possuem teste GPU. Preservacao da posicao original, metadados XFB do GS e captura antes do culling foram adicionados, mas ainda falta validacao GPU desses caminhos e captura atomica de triangulos em overflow quando o GS emite pontos.",
       "group_tags": [
         "comandos",
         "features",
@@ -864,17 +831,6 @@
       ]
     },
     {
-      "field": "KHR_index_type_uint8",
-      "extension": "VK_KHR_index_type_uint8",
-      "decision_category": "feature_not_reported",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: indexTypeUint8; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDeviceIndexTypeUint8FeaturesKHR.",
-      "group_tags": [
-        "features",
-        "promovida-ou-substituida",
-        "dependencias"
-      ]
-    },
-    {
       "field": "KHR_line_rasterization",
       "extension": "VK_KHR_line_rasterization",
       "decision_category": "missing_backend_commands",
@@ -902,18 +858,6 @@
       "extension": "VK_KHR_maintenance4",
       "decision_category": "missing_backend_commands",
       "decision_reason": "Rejeitada/não anunciada: feature bits explicitly false: maintenance4; no complete Dozen backend handler for: vkGetDeviceBufferMemoryRequirementsKHR, vkGetDeviceImageMemoryRequirementsKHR, vkGetDeviceImageSparseMemoryRequirementsKHR.",
-      "group_tags": [
-        "comandos",
-        "features",
-        "promovida-ou-substituida",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "KHR_maintenance5",
-      "extension": "VK_KHR_maintenance5",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: maintenance5; no complete Dozen backend handler for: vkCmdBindIndexBuffer2KHR, vkGetDeviceImageSubresourceLayoutKHR, vkGetImageSubresourceLayout2KHR, vkGetRenderingAreaGranularityKHR; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkBufferUsageFlagBits2KHR, VkBufferUsageFlags2CreateInfoKHR, VkBufferUsageFlags2KHR, VkDeviceImageSubresourceInfoKHR, VkImageSubresource2KHR, VkPhysicalDeviceMaintenance5FeaturesKHR, VkPhysicalDeviceMaintenance5PropertiesKHR, VkPipelineCreateFlagBits2KHR, VkPipelineCreateFlags2CreateInfoKHR, VkRenderingAreaInfoKHR ….",
       "group_tags": [
         "comandos",
         "features",
@@ -1002,18 +946,6 @@
       "decision_category": "feature_not_reported",
       "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: presentId2; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDevicePresentId2FeaturesKHR, VkPresentId2KHR, VkSurfaceCapabilitiesPresentId2KHR.",
       "group_tags": [
-        "features",
-        "plataforma-ou-wsi",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "KHR_present_wait",
-      "extension": "VK_KHR_present_wait",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: presentWait; no complete Dozen backend handler for: vkWaitForPresentKHR; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDevicePresentWaitFeaturesKHR.",
-      "group_tags": [
-        "comandos",
         "features",
         "plataforma-ou-wsi",
         "dependencias"
@@ -1366,16 +1298,6 @@
       ]
     },
     {
-      "field": "KHR_workgroup_memory_explicit_layout",
-      "extension": "VK_KHR_workgroup_memory_explicit_layout",
-      "decision_category": "feature_not_reported",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: workgroupMemoryExplicitLayout; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR.",
-      "group_tags": [
-        "features",
-        "dependencias"
-      ]
-    },
-    {
       "field": "MESA_image_alignment_control",
       "extension": "VK_MESA_image_alignment_control",
       "decision_category": "feature_not_reported",
@@ -1439,6 +1361,6 @@
       ]
     }
   ],
-  "source": "Original round39 review (171 entries, hash above), supplemented by the local seven-extension implementation review on 2026-10-07 (four new candidates, three moved out of pending). Policy input is not Vulkan CTS evidence."
+  "source": "Original round39 review (171 entries, hash above), supplemented by local reviews on 2026-10-07. Current follow-up promotes KHR_present_wait, KHR_maintenance5 and KHR_index_type_uint8 and adds its EXT alias. EXT_transform_feedback remains experimental and unadvertised: point-GS primitive-atomic overflow and new original-position paths are not GPU validated. Policy input and native probes are not Vulkan CTS evidence."
 }
 
