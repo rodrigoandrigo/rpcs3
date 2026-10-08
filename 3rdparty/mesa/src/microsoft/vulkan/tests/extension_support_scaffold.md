@@ -1,6 +1,6 @@
 # Base de implementação Vulkan do Dozen — Mesa 26.2.2
 
-A base registra **136 extensões pendentes** sem anunciá-las. Ela converte os requisitos do `vk.xml` em contratos de trabalho verificáveis; não representa suporte runtime.
+A base registra **119 extensões pendentes** sem anunciá-las. Ela converte os requisitos do `vk.xml` em contratos de trabalho verificáveis; não representa suporte runtime.
 
 ## Camadas reutilizáveis
 
@@ -15,17 +15,17 @@ A base registra **136 extensões pendentes** sem anunciá-las. Ela converte os r
 
 ## Cobertura do scaffold
 
-- Candidatas revisadas: 171
-- Implementadas na matriz: 35
-- Pendentes com checklist por extensão: 136
+- Candidatas revisadas: 177
+- Implementadas na matriz: 58
+- Pendentes com checklist por extensão: 119
 - Pendentes que aparecem anunciadas na fonte: 0
 - Extensões não encontradas no `vk.xml`: 0
 
 ## Bloqueios registrados
 
 - `feature_and_zero_one_semantics_unimplemented`: 1
-- `feature_not_reported`: 64
-- `missing_backend_commands`: 53
+- `feature_not_reported`: 57
+- `missing_backend_commands`: 43
 - `unhandled_type_or_semantics`: 17
 - `unsupported_stub_and_feature_false`: 1
 
@@ -34,4 +34,3 @@ A base registra **136 extensões pendentes** sem anunciá-las. Ela converte os r
 Uma extensão só pode sair da pendência depois que probe de capacidade, feature/property, dependências, estruturas `pNext`, comandos, tradução D3D12/compilador e testes aplicáveis estiverem cobertos. Símbolos gerados ou handlers comuns, isoladamente, não provam que a semântica esteja implementada.
 
 A lista completa e os requisitos de cada extensão estão em `extension_support_scaffold.json`. O teste `test_extension_support_scaffold.py` falha se uma extensão pendente for anunciada sem atualizar a matriz e comprovar sua implementação.
-

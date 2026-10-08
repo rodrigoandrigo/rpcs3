@@ -62,17 +62,18 @@ class DepthClipEnableSupportTest(unittest.TestCase):
             2,
         )
 
-    def test_dynamic_eds3_command_is_not_claimed_by_this_extension(self):
+    def test_dynamic_eds3_command_has_separate_feature_and_backend(self):
         ext = self.registry.find(
             "./extensions/extension[@name='VK_EXT_extended_dynamic_state3']"
         )
         self.assertIsNotNone(ext)
         dynamic = ext.find("./require/command[@name='vkCmdSetDepthClipEnableEXT']")
         self.assertIsNotNone(dynamic)
-        self.assertNotRegex(
+        self.assertRegex(
             self.device,
             r"\.EXT_extended_dynamic_state3\s*=\s*true\b",
         )
+        self.assertRegex(self.device, r"\.extendedDynamicState3DepthClipEnable\s*=\s*true")
 
 
 if __name__ == "__main__":

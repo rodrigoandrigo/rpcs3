@@ -222,6 +222,15 @@ dzn_image_create(struct dzn_device *device,
    else
       image->desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
 
+   /* Raw matching-aspect copy shaders must see/store integer bits even when
+    * the public single-channel color format is float or normalized. */
+   if (usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+      DXGI_FORMAT typeless = dzn_get_typeless_dxgi_format(image->desc.Format);
+      if (typeless == DXGI_FORMAT_R8_TYPELESS || typeless == DXGI_FORMAT_R16_TYPELESS ||
+          typeless == DXGI_FORMAT_R32_TYPELESS)
+         image->desc.Format = typeless;
+   }
+
    image->desc.SampleDesc.Quality = 0;
 
    image->desc.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -1258,6 +1267,7 @@ dzn_image_view_prepare_uav_desc(struct dzn_image_view *iview)
    struct dzn_physical_device *pdev =
       container_of(iview->vk.base.device->physical, struct dzn_physical_device, vk);
    bool use_array = iview->vk.base_array_layer > 0 || iview->vk.layer_count > 1;
+   bool from_3d_image = iview->vk.image->image_type == VK_IMAGE_TYPE_3D;
 
    assert(iview->vk.image->samples == 1);
 
@@ -1287,7 +1297,12 @@ dzn_image_view_prepare_uav_desc(struct dzn_image_view *iview)
    case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
    case VK_IMAGE_VIEW_TYPE_CUBE:
    case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
-      if (use_array) {
+      if (from_3d_image) {
+         iview->uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+         iview->uav_desc.Texture3D.MipSlice = iview->vk.base_mip_level;
+         iview->uav_desc.Texture3D.FirstWSlice = iview->vk.base_array_layer;
+         iview->uav_desc.Texture3D.WSize = iview->vk.layer_count;
+      } else if (use_array) {
          iview->uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
          iview->uav_desc.Texture2DArray.PlaneSlice = 0;
          iview->uav_desc.Texture2DArray.MipSlice = iview->vk.base_mip_level;

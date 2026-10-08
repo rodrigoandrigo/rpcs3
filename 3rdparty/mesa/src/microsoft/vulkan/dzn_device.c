@@ -206,6 +206,8 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
        * fulfill; dynamic_state2 and vertex input have no such dependency. */
       .EXT_extended_dynamic_state           = pdev->options14.IndependentFrontAndBackStencilRefMaskSupported,
       .EXT_extended_dynamic_state2          = true,
+      .EXT_extended_dynamic_state3          = true,
+      .EXT_primitive_topology_list_restart   = true,
       .EXT_vertex_input_dynamic_state       = true,
       .KHR_present_id                       = true,
 #ifdef _WIN32
@@ -284,6 +286,7 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .EXT_index_type_uint8                 = true,
       .KHR_index_type_uint8                 = true,
       .KHR_maintenance5                     = true,
+      .KHR_line_rasterization               = true,
       .KHR_shader_float_controls             = true,
       /* Mesa SPIR-V/NIR consumes FloatControls2 fast-math defaults and modes. */
       .KHR_shader_float_controls2            = true,
@@ -344,8 +347,15 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .EXT_depth_clip_enable                 = true,
       /* NIR remaps negative-one-to-one clip-space depth into D3D12's [0, 1]. */
       .EXT_depth_clip_control                = true,
+      /* D3D12 rasterizer state 2 exposes the Vulkan line modes.  Stippled
+       * line feature bits stay disabled until shader emulation exists. */
+      .EXT_line_rasterization                = true,
+      /* The EXT query is backed by the stable D3D12 removal HRESULT. */
+      .EXT_device_fault                      = true,
       /* D3D12 3D UAVs expose FirstWSlice/WSize for storage-image views. */
       .EXT_image_sliced_view_of_3d           = true,
+      /* Storage-only 2D views are represented by a single-slice D3D12 3D UAV. */
+      .EXT_image_2d_view_of_3d               = true,
       /* Direct-bound render targets have no separate load/store operation. */
       .EXT_load_store_op_none                 = true,
       /* KHR is the promoted spelling of the same load/store operations. */
@@ -731,11 +741,15 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
                        VK_QUEUE_TRANSFER_BIT,
          .queueCount = 8,
          .timestampValidBits = 64,
-         /* D3D12 compute lists support partial CopyTextureRegion operations. */
+         /* Native direct lists support partial CopyTextureRegion operations. */
          .minImageTransferGranularity = { 1, 1, 1 },
       },
       .desc = {
-         .Type = D3D12_COMMAND_LIST_TYPE_COMPUTE,
+         /* Vulkan compute queues also permit image transfers.  Partial MSAA
+          * and matching depth/stencil copies require internal raster passes,
+          * which are not legal in a D3D12 compute command list.  Keep the
+          * public compute-only flags, but use a direct native command list. */
+         .Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
       },
    };
 
@@ -937,13 +951,27 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
       .extendedDynamicState2 = true,
       .extendedDynamicState2LogicOp = false,
       .extendedDynamicState2PatchControlPoints = false,
+      .extendedDynamicState3DepthClampEnable = true,
+      .extendedDynamicState3DepthClipEnable = true,
+      .extendedDynamicState3SampleMask = true,
+      .extendedDynamicState3AlphaToCoverageEnable = true,
+      .extendedDynamicState3ColorBlendEnable = true,
+      .extendedDynamicState3ColorBlendEquation = true,
+      .extendedDynamicState3ColorWriteMask = true,
+      .extendedDynamicState3RasterizationSamples = true,
+      .extendedDynamicState3ConservativeRasterizationMode =
+         pdev->options.ConservativeRasterizationTier != D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED,
+      .extendedDynamicState3ExtraPrimitiveOverestimationSize =
+         pdev->options.ConservativeRasterizationTier != D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED,
+      .primitiveTopologyListRestart = true,
+      .primitiveTopologyPatchListRestart = true,
       .vertexInputDynamicState = true,
       .robustBufferAccess = true, /* This feature is mandatory */
       .fullDrawIndexUint32 = false,
       .imageCubeArray = true,
       .independentBlend = true,
       .geometryShader = true,
-      .tessellationShader = false,
+      .tessellationShader = true,
       .sampleRateShading = true,
       .dualSrcBlend = false,
       .logicOp = false,
@@ -957,6 +985,16 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
       .depthClipControl = true,
       /* D3D12 UAV descriptors natively restrict 3D image slice ranges. */
       .imageSlicedViewOf3D = true,
+      .image2DViewOf3D = true,
+      .sampler2DViewOf3D = false,
+      .rectangularLines = pdev->options19.NarrowQuadrilateralLinesSupported,
+      .bresenhamLines = true,
+      .smoothLines = pdev->options19.NarrowQuadrilateralLinesSupported,
+      .stippledRectangularLines = false,
+      .stippledBresenhamLines = false,
+      .stippledSmoothLines = false,
+      .deviceFaultEXT = true,
+      .deviceFaultVendorBinaryEXT = false,
       .depthBiasClamp = true,
       .fillModeNonSolid = true,
       .depthBounds = pdev->options2.DepthBoundsTestSupported,
@@ -1189,6 +1227,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       .degenerateLinesRasterized = false,
       .fullyCoveredFragmentShaderInputVariable = false,
       .conservativeRasterizationPostDepthCoverage = false,
+      .lineSubPixelPrecisionBits = D3D12_SUBPIXEL_FRACTIONAL_BIT_COUNT,
       .apiVersion = DZN_API_VERSION,
       .driverVersion = vk_get_driver_version(),
 
@@ -1246,14 +1285,14 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       .maxVertexInputAttributeOffset = D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES - 1,
       .maxVertexInputBindingStride = D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES,
       .maxVertexOutputComponents = D3D12_VS_OUTPUT_REGISTER_COUNT * D3D12_VS_OUTPUT_REGISTER_COMPONENTS,
-      .maxTessellationGenerationLevel = 0,
-      .maxTessellationPatchSize = 0,
-      .maxTessellationControlPerVertexInputComponents = 0,
-      .maxTessellationControlPerVertexOutputComponents = 0,
-      .maxTessellationControlPerPatchOutputComponents = 0,
-      .maxTessellationControlTotalOutputComponents = 0,
-      .maxTessellationEvaluationInputComponents = 0,
-      .maxTessellationEvaluationOutputComponents = 0,
+      .maxTessellationGenerationLevel = 64,
+      .maxTessellationPatchSize = 32,
+      .maxTessellationControlPerVertexInputComponents = 128,
+      .maxTessellationControlPerVertexOutputComponents = 128,
+      .maxTessellationControlPerPatchOutputComponents = 120,
+      .maxTessellationControlTotalOutputComponents = 4096,
+      .maxTessellationEvaluationInputComponents = 128,
+      .maxTessellationEvaluationOutputComponents = 128,
       .maxGeometryShaderInvocations = D3D12_GS_MAX_INSTANCE_COUNT,
       .maxGeometryInputComponents = D3D12_GS_INPUT_REGISTER_COUNT * D3D12_GS_INPUT_REGISTER_COMPONENTS,
       .maxGeometryOutputComponents = D3D12_GS_OUTPUT_REGISTER_COUNT * D3D12_GS_OUTPUT_REGISTER_COMPONENTS,
@@ -4784,6 +4823,31 @@ cleanup:
    if (heap)
       ID3D12Heap_Release(heap);
    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+dzn_GetDeviceFaultInfoEXT(VkDevice _device,
+                          VkDeviceFaultCountsEXT *pFaultCounts,
+                          VkDeviceFaultInfoEXT *pFaultInfo)
+{
+   VK_FROM_HANDLE(dzn_device, device, _device);
+
+   /* D3D12 always preserves the device-removal HRESULT.  It does not expose
+    * portable fault-address or vendor-blob records through the interfaces
+    * available to the UWP build, so advertise only the core deviceFault bit
+    * and return the stable diagnostic as the required description. */
+   const HRESULT reason = ID3D12Device_GetDeviceRemovedReason(device->dev);
+   pFaultCounts->addressInfoCount = 0;
+   pFaultCounts->vendorInfoCount = 0;
+   pFaultCounts->vendorBinarySize = 0;
+
+   if (pFaultInfo) {
+      snprintf(pFaultInfo->description, sizeof(pFaultInfo->description),
+               "D3D12 device removed (HRESULT 0x%08lx)",
+               (unsigned long)reason);
+   }
+
+   return VK_SUCCESS;
 }
 
 #if defined(_WIN32)

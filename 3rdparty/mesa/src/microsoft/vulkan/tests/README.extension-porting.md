@@ -1,6 +1,6 @@
 # Base de implementação Vulkan do Dozen — Mesa 26.2.2
 
-A base registra **125 extensões pendentes** sem anunciá-las. Ela converte os requisitos do `vk.xml` em contratos de trabalho verificáveis; não representa suporte runtime.
+A base registra **123 extensões pendentes** sem anunciá-las. Ela converte os requisitos do `vk.xml` em contratos de trabalho verificáveis; não representa suporte runtime.
 
 ## Camadas reutilizáveis
 
@@ -16,8 +16,8 @@ A base registra **125 extensões pendentes** sem anunciá-las. Ela converte os r
 ## Cobertura do scaffold
 
 - Candidatas revisadas: 177
-- Implementadas na matriz: 52
-- Pendentes com checklist por extensão: 125
+- Implementadas na matriz: 54
+- Pendentes com checklist por extensão: 123
 - Pendentes que aparecem anunciadas na fonte: 0
 - Extensões não encontradas no `vk.xml`: 0
 

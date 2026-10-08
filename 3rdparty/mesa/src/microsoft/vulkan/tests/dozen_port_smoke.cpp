@@ -18,7 +18,8 @@
 
 static LONG CALLBACK report_fault(EXCEPTION_POINTERS* fault)
 {
-   if (fault->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+   if (fault->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION &&
+       fault->ExceptionRecord->ExceptionCode != 0xc0000374u) return EXCEPTION_CONTINUE_SEARCH;
    void* frames[48]{};
    unsigned count=CaptureStackBackTrace(0, 48, frames, nullptr);
    for (unsigned i=0; i<count; ++i) {
@@ -41,6 +42,7 @@ static void check(VkResult result, const char* operation)
 }
 
 #include "dozen_seven_smoke.h"
+#include "dozen_copy_contracts.h"
 
 int wmain(int argc, wchar_t** argv)
 {
@@ -83,14 +85,19 @@ int wmain(int argc, wchar_t** argv)
          return static_cast<int>(code);
       }
       bool bounded=argc==5 && !std::wcscmp(argv[1], L"--bounded");
+      bool copy_contracts=argc==5 && !std::wcscmp(argv[1], L"--copy-contracts");
+      bool copy_compute=argc==5 && !std::wcscmp(argv[1], L"--copy-compute-contracts");
+      copy_contracts=copy_contracts || copy_compute;
       bool four_core=argc==5 && !std::wcscmp(argv[1], L"--four-core");
       bool present_probe=argc==5 && !std::wcscmp(argv[1], L"--present");
       bool contracts_probe=argc==5 && !std::wcscmp(argv[1], L"--contracts");
-      bool provoking_probe=argc==5 && !std::wcscmp(argv[1], L"--provoking");
+      bool state3_probe=argc==5 && !std::wcscmp(argv[1], L"--topology-state3");
+      bool provoking_probe=state3_probe || (argc==5 && !std::wcscmp(argv[1], L"--provoking"));
       bool six_core=argc==5 && !std::wcscmp(argv[1], L"--six-core");
       bool six=six_core || (argc==5 && !std::wcscmp(argv[1], L"--six"));
       bool seven=provoking_probe || contracts_probe || present_probe || four_core || six || (argc==5 && !std::wcscmp(argv[1], L"--seven"));
       if (bounded) {++argv; --argc;}
+      if (copy_contracts) {++argv; --argc;}
       if (seven) {++argv; --argc;}
       AddVectoredExceptionHandler(1, report_fault);
       if (argc != 4) throw std::runtime_error("Usage: dozen_port_smoke.exe <absolute vulkan_dzn.dll> <SDK dxil.dll> <compute.spv>");
@@ -175,8 +182,10 @@ int wmain(int argc, wchar_t** argv)
       std::vector<VkQueueFamilyProperties> families(count);
       vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, families.data());
       uint32_t family=0;
-      while (family<count && !(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;
-      if (family==count) throw std::runtime_error("No graphics queue");
+      while (family<count && (copy_compute ?
+             !(families[family].queueFlags & VK_QUEUE_COMPUTE_BIT) || (families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) :
+             !(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT))) ++family;
+      if (family==count) throw std::runtime_error("Requested queue family unavailable");
       float priority=1;
       VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
       qci.queueFamilyIndex=family; qci.queueCount=1; qci.pQueuePriorities=&priority;
@@ -201,6 +210,23 @@ int wmain(int argc, wchar_t** argv)
       VkPhysicalDeviceFeatures graphics_features{};
       VkPhysicalDeviceMaintenance5FeaturesKHR maintenance5{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR};
       VkPhysicalDeviceIndexTypeUint8FeaturesKHR uint8_indices{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INDEX_TYPE_UINT8_FEATURES_KHR};
+      VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT list_restart{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT};
+      VkPhysicalDeviceExtendedDynamicState3FeaturesEXT state3{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT};
+      VkPhysicalDeviceFaultFeaturesEXT fault_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+      VkPhysicalDeviceLineRasterizationFeaturesEXT line_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT};
+      VkPhysicalDeviceImage2DViewOf3DFeaturesEXT image2d3d_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_2D_VIEW_OF_3D_FEATURES_EXT};
+      {
+         VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+         query.pNext=&fault_features; fault_features.pNext=&line_features; line_features.pNext=&image2d3d_features;
+         vkGetPhysicalDeviceFeatures2(physical,&query);
+         if(!fault_features.deviceFault || !line_features.bresenhamLines)
+            throw std::runtime_error("Advertised device-fault/line extension lacks required feature path");
+         if(fault_features.deviceFaultVendorBinary || line_features.stippledRectangularLines ||
+            line_features.stippledBresenhamLines || line_features.stippledSmoothLines)
+            throw std::runtime_error("Unsupported fault binary or line stipple feature was advertised");
+         if(!image2d3d_features.image2DViewOf3D || image2d3d_features.sampler2DViewOf3D)
+            throw std::runtime_error("Storage-only image2DViewOf3D feature contract mismatch");
+      }
       if (seven) {
          VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; query.pNext=&formats4444;
          vkGetPhysicalDeviceFeatures2(physical,&query);
@@ -248,7 +274,29 @@ int wmain(int argc, wchar_t** argv)
       if(provoking_probe) {
          provoking.provokingVertexLast=VK_TRUE;
          present_id.pNext=&provoking;
+         if(state3_probe) {
+            list_restart.primitiveTopologyListRestart=VK_TRUE;
+            list_restart.primitiveTopologyPatchListRestart=VK_TRUE;
+            graphics_features.tessellationShader=VK_TRUE;
+            state3.extendedDynamicState3DepthClampEnable=VK_TRUE;
+            state3.extendedDynamicState3DepthClipEnable=VK_TRUE;
+            state3.extendedDynamicState3SampleMask=VK_TRUE;
+            state3.extendedDynamicState3AlphaToCoverageEnable=VK_TRUE;
+            state3.extendedDynamicState3ColorBlendEnable=VK_TRUE;
+            state3.extendedDynamicState3ColorBlendEquation=VK_TRUE;
+            state3.extendedDynamicState3ColorWriteMask=VK_TRUE;
+            state3.extendedDynamicState3RasterizationSamples=VK_TRUE;
+            graphics_features.depthBiasClamp=VK_TRUE;
+            provoking.pNext=&list_restart; list_restart.pNext=&state3;
+         }
       }
+      fault_features.deviceFault=VK_TRUE;
+      line_features.rectangularLines=!!line_features.rectangularLines;
+      line_features.bresenhamLines=VK_TRUE;
+      line_features.smoothLines=!!line_features.smoothLines;
+      image2d3d_features.image2DViewOf3D=VK_TRUE;
+      image2d3d_features.pNext=zero.pNext; line_features.pNext=&image2d3d_features;
+      fault_features.pNext=&line_features; zero.pNext=&fault_features;
       std::cout << "Descriptor path: " << (four_core ? "bounded per-pipeline robustness2" : (bounded ? "bounded robustness2" : "bindless")) << '\n';
       VkDevice device{}; check(vkCreateDevice(physical, &dci, nullptr, &device), "device/all advertised extensions");
 #define DEVICE_FN(name) auto name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device, #name)); if (!name) throw std::runtime_error(#name " missing")
@@ -261,13 +309,16 @@ int wmain(int argc, wchar_t** argv)
       DEVICE_FN(vkDestroyBuffer); DEVICE_FN(vkFreeMemory); DEVICE_FN(vkDestroyCommandPool); DEVICE_FN(vkDestroyDevice);
       DEVICE_FN(vkCmdPushDescriptorSetKHR); DEVICE_FN(vkCmdPushDescriptorSetWithTemplateKHR);
       DEVICE_FN(vkCmdDrawMultiEXT); DEVICE_FN(vkResetQueryPoolEXT);
+      DEVICE_FN(vkGetDeviceFaultInfoEXT); DEVICE_FN(vkCmdSetLineStippleEXT);
       DEVICE_FN(vkCreateShaderModule); DEVICE_FN(vkCreateDescriptorSetLayout); DEVICE_FN(vkCreatePipelineLayout);
       DEVICE_FN(vkCreateComputePipelines); DEVICE_FN(vkCmdBindPipeline); DEVICE_FN(vkCmdDispatch);
       DEVICE_FN(vkDestroyPipeline); DEVICE_FN(vkDestroyPipelineLayout); DEVICE_FN(vkDestroyDescriptorSetLayout); DEVICE_FN(vkDestroyShaderModule);
       VkQueue queue{}; vkGetDeviceQueue(device, family, 0, &queue);
+      if (copy_contracts)
+         dozen_copy_contracts(physical,device,queue,family,get,instance,vkGetDeviceProcAddr);
       if (seven)
          dozen_seven_smoke(instance, physical, device, queue, family, get, vkGetDeviceProcAddr,
-                           std::filesystem::path(argv[3]).parent_path(), extended1, conservative, formats4444.formatA4B4G4R4, six, !six_core, four_core, contracts_probe, provoking_probe);
+                           std::filesystem::path(argv[3]).parent_path(), extended1, conservative, formats4444.formatA4B4G4R4, six, !six_core, four_core, contracts_probe, provoking_probe, state3_probe);
       if (seven)
          dozen_seven_wsi_smoke(instance, physical, device, queue, family, get, vkGetDeviceProcAddr, module, present_probe || (six && !six_core));
       VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};

@@ -5,7 +5,7 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
                              PFN_vkGetInstanceProcAddr get,
                              PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr,
                              const std::filesystem::path& directory,
-                             bool extended1, bool conservative, bool a4b4g4r4, bool six, bool experimental_xfb = true, bool four_core = false, bool contracts = false, bool provoking_test = false)
+                             bool extended1, bool conservative, bool a4b4g4r4, bool six, bool experimental_xfb = true, bool four_core = false, bool contracts = false, bool provoking_test = false, bool state3_test = false)
 {
 #define SEVEN_FN(name) auto name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(device, #name)); if (!name) throw std::runtime_error(#name " missing")
    SEVEN_FN(vkCreateImage); SEVEN_FN(vkGetImageMemoryRequirements); SEVEN_FN(vkBindImageMemory);
@@ -14,12 +14,14 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
    SEVEN_FN(vkMapMemory); SEVEN_FN(vkUnmapMemory); SEVEN_FN(vkFlushMappedMemoryRanges);
    SEVEN_FN(vkInvalidateMappedMemoryRanges); SEVEN_FN(vkCreateShaderModule);
    SEVEN_FN(vkCreatePipelineLayout); SEVEN_FN(vkCreateGraphicsPipelines);
+   SEVEN_FN(vkCreateComputePipelines); SEVEN_FN(vkCreateDescriptorSetLayout);
    SEVEN_FN(vkCreateRenderPass); SEVEN_FN(vkCreateFramebuffer); SEVEN_FN(vkCreateCommandPool);
    SEVEN_FN(vkAllocateCommandBuffers); SEVEN_FN(vkBeginCommandBuffer); SEVEN_FN(vkEndCommandBuffer);
    SEVEN_FN(vkCmdBeginRenderPass); SEVEN_FN(vkCmdEndRenderPass); SEVEN_FN(vkCmdBindPipeline);
    SEVEN_FN(vkCmdSetVertexInputEXT); SEVEN_FN(vkCmdBindVertexBuffers);
    SEVEN_FN(vkCmdSetRasterizerDiscardEnableEXT); SEVEN_FN(vkCmdSetDepthBiasEnableEXT);
    SEVEN_FN(vkCmdSetPrimitiveRestartEnableEXT); SEVEN_FN(vkCmdDraw);
+   SEVEN_FN(vkCmdPushDescriptorSetKHR); SEVEN_FN(vkCmdDispatch);
    SEVEN_FN(vkCmdCopyImageToBuffer); SEVEN_FN(vkCmdPipelineBarrier);
    SEVEN_FN(vkCmdClearColorImage);
    SEVEN_FN(vkCmdBeginConditionalRenderingEXT); SEVEN_FN(vkCmdEndConditionalRenderingEXT);
@@ -32,6 +34,7 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
    SEVEN_FN(vkQueueSubmit); SEVEN_FN(vkQueueWaitIdle);
    SEVEN_FN(vkDestroyCommandPool); SEVEN_FN(vkDestroyFramebuffer); SEVEN_FN(vkDestroyRenderPass);
    SEVEN_FN(vkDestroyPipeline); SEVEN_FN(vkDestroyPipelineLayout); SEVEN_FN(vkDestroyShaderModule);
+   SEVEN_FN(vkDestroyDescriptorSetLayout);
    SEVEN_FN(vkDestroyImageView); SEVEN_FN(vkDestroyImage); SEVEN_FN(vkDestroyBuffer);
    auto memory_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(get(instance, "vkGetPhysicalDeviceMemoryProperties"));
    VkPhysicalDeviceMemoryProperties memory{}; memory_properties(physical, &memory);
@@ -123,6 +126,18 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
    const uint16_t restart_indices[]={0,1,2,0xffff,3,4,5};
    std::memcpy(static_cast<char*>(mapped)+544,restart_positions,sizeof(restart_positions));
    std::memcpy(static_cast<char*>(mapped)+800,restart_indices,sizeof(restart_indices));
+   const uint16_t list_tri_indices[]={0,1,2,0,0xffff,3,4,5,3,4};
+   const uint32_t list_line_indices[]={0,1,0xffffffffu,1,2,0};
+   const uint16_t list_point_indices[]={0,0xffff,1,2};
+   std::memcpy(static_cast<char*>(mapped)+832,list_tri_indices,sizeof(list_tri_indices));
+   std::memcpy(static_cast<char*>(mapped)+864,list_line_indices,sizeof(list_line_indices));
+   std::memcpy(static_cast<char*>(mapped)+896,list_point_indices,sizeof(list_point_indices));
+   const float slope_positions[]={-.5f,-.5f,.25f,1,.5f,-.5f,.75f,1,-.5f,.5f,.25f,1};
+   std::memcpy(static_cast<char*>(mapped)+960,slope_positions,sizeof(slope_positions));
+   const uint16_t patch_indices[]={0,1,2,0,0xffff,0,1,2};
+   const VkDrawIndexedIndirectCommand patch_indirect={8,1,0,0,0};
+   std::memcpy(static_cast<char*>(mapped)+1056,patch_indices,sizeof(patch_indices));
+   std::memcpy(static_cast<char*>(mapped)+1072,&patch_indirect,sizeof(patch_indirect));
    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory=buffer_memory; range.size=VK_WHOLE_SIZE;
    check(vkFlushMappedMemoryRanges(device, 1, &range), "seven flush");
    vkUnmapMemory(device, buffer_memory);
@@ -212,6 +227,76 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
       rast.pNext=nullptr; stages[0].module=vs; stages[1].module=fs;
    }
    VkCommandPool pool{}; check(vkCreateCommandPool(device, &pci, nullptr, &pool), "seven pool");
+   if(contracts) {
+      VkImageCreateInfo info3d{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      info3d.flags=VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT;
+      info3d.imageType=VK_IMAGE_TYPE_3D; info3d.format=VK_FORMAT_R8G8B8A8_UNORM;
+      info3d.extent={4,4,2}; info3d.mipLevels=info3d.arrayLayers=1;
+      info3d.samples=VK_SAMPLE_COUNT_1_BIT; info3d.tiling=VK_IMAGE_TILING_OPTIMAL;
+      info3d.usage=VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+      VkImage image3d{}; check(vkCreateImage(device,&info3d,nullptr,&image3d),"image2DViewOf3D image");
+      VkMemoryRequirements image3d_req{}; vkGetImageMemoryRequirements(device,image3d,&image3d_req);
+      VkDeviceMemory image3d_memory=allocate(image3d_req,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      check(vkBindImageMemory(device,image3d,image3d_memory,0),"image2DViewOf3D bind");
+      VkImageViewCreateInfo view3d{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      view3d.image=image3d; view3d.viewType=VK_IMAGE_VIEW_TYPE_2D; view3d.format=info3d.format;
+      view3d.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,1,1};
+      VkImageView image2d{}; check(vkCreateImageView(device,&view3d,nullptr,&image2d),"image2DViewOf3D view");
+      VkDescriptorSetLayoutBinding storage_binding{}; storage_binding.binding=0;
+      storage_binding.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; storage_binding.descriptorCount=1;
+      storage_binding.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;
+      VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+      set_info.flags=VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+      set_info.bindingCount=1; set_info.pBindings=&storage_binding;
+      VkDescriptorSetLayout set_layout{}; check(vkCreateDescriptorSetLayout(device,&set_info,nullptr,&set_layout),"image2DViewOf3D set layout");
+      VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+      pipeline_layout_info.setLayoutCount=1; pipeline_layout_info.pSetLayouts=&set_layout;
+      VkPipelineLayout compute_layout{}; check(vkCreatePipelineLayout(device,&pipeline_layout_info,nullptr,&compute_layout),"image2DViewOf3D pipeline layout");
+      VkShaderModule compute_shader=load_shader("dozen-image2d3d.comp.spv");
+      VkComputePipelineCreateInfo compute_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+      compute_info.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+      compute_info.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT; compute_info.stage.module=compute_shader;
+      compute_info.stage.pName="main"; compute_info.layout=compute_layout;
+      VkPipeline compute{}; check(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&compute_info,nullptr,&compute),"image2DViewOf3D pipeline");
+      VkCommandBufferAllocateInfo alloc_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      alloc_info.commandPool=pool; alloc_info.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; alloc_info.commandBufferCount=1;
+      VkCommandBuffer commands{}; check(vkAllocateCommandBuffers(device,&alloc_info,&commands),"image2DViewOf3D commands");
+      VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; check(vkBeginCommandBuffer(commands,&begin),"image2DViewOf3D begin");
+      VkImageMemoryBarrier image_barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      image_barrier.srcQueueFamilyIndex=image_barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+      image_barrier.image=image3d; image_barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+      image_barrier.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED; image_barrier.newLayout=VK_IMAGE_LAYOUT_GENERAL;
+      image_barrier.dstAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+      vkCmdPipelineBarrier(commands,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,0,nullptr,0,nullptr,1,&image_barrier);
+      VkDescriptorImageInfo descriptor{}; descriptor.imageView=image2d; descriptor.imageLayout=VK_IMAGE_LAYOUT_GENERAL;
+      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; write.dstBinding=0;
+      write.descriptorCount=1; write.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; write.pImageInfo=&descriptor;
+      vkCmdBindPipeline(commands,VK_PIPELINE_BIND_POINT_COMPUTE,compute);
+      vkCmdPushDescriptorSetKHR(commands,VK_PIPELINE_BIND_POINT_COMPUTE,compute_layout,0,1,&write);
+      vkCmdDispatch(commands,1,1,1);
+      image_barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT; image_barrier.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+      image_barrier.oldLayout=VK_IMAGE_LAYOUT_GENERAL; image_barrier.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      vkCmdPipelineBarrier(commands,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&image_barrier);
+      VkBufferImageCopy image_copy{}; image_copy.bufferOffset=4096;
+      image_copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; image_copy.imageOffset={0,0,1}; image_copy.imageExtent={1,1,1};
+      vkCmdCopyImageToBuffer(commands,image3d,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer,1,&image_copy);
+      VkBufferMemoryBarrier host_barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER}; host_barrier.buffer=buffer;
+      host_barrier.offset=4096; host_barrier.size=4; host_barrier.srcQueueFamilyIndex=host_barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+      host_barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT; host_barrier.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+      vkCmdPipelineBarrier(commands,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&host_barrier,0,nullptr);
+      check(vkEndCommandBuffer(commands),"image2DViewOf3D end");
+      VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount=1; submit.pCommandBuffers=&commands;
+      check(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE),"image2DViewOf3D submit"); check(vkQueueWaitIdle(queue),"image2DViewOf3D wait");
+      void* result{}; check(vkMapMemory(device,buffer_memory,4096,4,0,&result),"image2DViewOf3D map");
+      VkMappedMemoryRange result_range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; result_range.memory=buffer_memory; result_range.offset=4096; result_range.size=4;
+      check(vkInvalidateMappedMemoryRanges(device,1,&result_range),"image2DViewOf3D invalidate");
+      uint32_t pixel=*static_cast<uint32_t*>(result); vkUnmapMemory(device,buffer_memory);
+      if(pixel!=0xffbf8040u) throw std::runtime_error("image2DViewOf3D slice readback mismatch: "+std::to_string(pixel));
+      vkDestroyPipeline(device,compute,nullptr); vkDestroyShaderModule(device,compute_shader,nullptr);
+      vkDestroyPipelineLayout(device,compute_layout,nullptr); vkDestroyDescriptorSetLayout(device,set_layout,nullptr);
+      vkDestroyImageView(device,image2d,nullptr); vkDestroyImage(device,image3d,nullptr); vkFreeMemory(device,image3d_memory,nullptr);
+      std::cout << "PASS: storage image2DViewOf3D slice write/readback\n";
+   }
    for (uint32_t test=0; test<(contracts?18u:(six?(experimental_xfb?19u:20u):12u)); test++) {
       if (test==5 && !conservative) continue;
       VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO}; ai.commandPool=pool;
@@ -382,20 +467,51 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
       VkPipelineCache cache{}; check(vkCreatePipelineCache(device,&cache_info,nullptr,&cache),"provoking shared pipeline cache");
       VkShaderModule provoking_vs=load_shader("dozen-provoking.vert.spv"), provoking_fs=load_shader("dozen-provoking.frag.spv");
       VkShaderModule triangle_gs=load_shader("dozen-provoking.geom.spv"), line_gs=load_shader("dozen-provoking-line.geom.spv");
-      VkPipelineShaderStageCreateInfo local_stages[3]{stages[0],stages[1],{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+      VkShaderModule bias_vs{},bias_fs{};
+      VkShaderModule tcs{},tes{};
+      VkShaderModule tes_quad{},tes_line{},tes_point{};
+      if(state3_test) {bias_vs=load_shader("dozen-point-bias.vert.spv"); bias_fs=load_shader("dozen-point-bias.frag.spv");}
+      if(state3_test) {tcs=load_shader("dozen-tess.tesc.spv");tes=load_shader("dozen-tess.tese.spv");}
+      if(state3_test) {tes_quad=load_shader("dozen-tess-quad.tese.spv");tes_line=load_shader("dozen-tess-line.tese.spv");tes_point=load_shader("dozen-tess-point.tese.spv");}
+      VkPipelineShaderStageCreateInfo local_stages[4]{stages[0],stages[1],{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
       local_stages[0].module=provoking_vs; local_stages[1].module=provoking_fs;
       local_stages[2].stage=VK_SHADER_STAGE_GEOMETRY_BIT; local_stages[2].pName="main";
       pi.pStages=local_stages;
-      for(uint32_t test=0;test<9;test++) {
+      if(state3_test) {
+         dynamics.insert(dynamics.end(), {VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT,VK_DYNAMIC_STATE_DEPTH_CLIP_ENABLE_EXT,
+            VK_DYNAMIC_STATE_SAMPLE_MASK_EXT,VK_DYNAMIC_STATE_ALPHA_TO_COVERAGE_ENABLE_EXT,
+            VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT,
+            VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT,VK_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT,VK_DYNAMIC_STATE_DEPTH_BIAS});
+         dy.dynamicStateCount=static_cast<uint32_t>(dynamics.size()); dy.pDynamicStates=dynamics.data();
+      }
+      rast.rasterizerDiscardEnable=VK_FALSE;
+      for(uint32_t test=0;test<(state3_test?32u:9u);test++) {
          std::vector<uint32_t> first_pixels;
          for(uint32_t mode=0;mode<2;mode++) {
             VkPipelineRasterizationProvokingVertexStateCreateInfoEXT pv{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT};
             pv.provokingVertexMode=mode?VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT:VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
-            rast.pNext=&pv; rast.polygonMode=test==5?VK_POLYGON_MODE_POINT:VK_POLYGON_MODE_FILL;
+            rast.pNext=&pv; rast.polygonMode=test==5 || test>=29 || (test>=17 && test<20)?VK_POLYGON_MODE_POINT:VK_POLYGON_MODE_FILL;
+            local_stages[0].module=test>=17?bias_vs:provoking_vs;
+            local_stages[1].module=test>=17?bias_fs:provoking_fs;
             ia.topology=test==1 || test==4 || test==8?VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
                test==2?VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
-               test==3?VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+               test==3?VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:test==10?VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+               test==11?VK_PRIMITIVE_TOPOLOGY_POINT_LIST:VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             local_stages[2].module=test==7?line_gs:triangle_gs; pi.stageCount=test==6 || test==7?3:2;
+            local_stages[2].stage=VK_SHADER_STAGE_GEOMETRY_BIT;
+            VkPipelineTessellationStateCreateInfo tessellation{VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO};
+            tessellation.patchControlPoints=3; pi.pTessellationState=test>=20?&tessellation:nullptr;
+            VkPipelineTessellationDomainOriginStateCreateInfo origin{VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_DOMAIN_ORIGIN_STATE_CREATE_INFO};
+            origin.domainOrigin=VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT;
+            if(test==25 || test==26) tessellation.pNext=&origin;
+            if(test>=20) {
+               ia.topology=VK_PRIMITIVE_TOPOLOGY_PATCH_LIST; pi.stageCount=4;
+               local_stages[2].stage=VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT; local_stages[2].module=tcs;
+               local_stages[3].stage=VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT; local_stages[3].module=tes; local_stages[3].pName="main";
+               if(test==27) local_stages[3].module=tes_quad;
+               if(test==28 || test==29) local_stages[3].module=tes_line;
+               if(test==30) local_stages[3].module=tes_point;
+            }
             VkPipeline draw_pipeline{}; check(vkCreateGraphicsPipelines(device,cache,1,&pi,nullptr,&draw_pipeline),"provoking pipeline/cache");
             vkDestroyPipeline(device,draw_pipeline,nullptr);
             check(vkCreateGraphicsPipelines(device,cache,1,&pi,nullptr,&draw_pipeline),"provoking cached pipeline");
@@ -408,22 +524,51 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
             render.renderArea=scissor; render.clearValueCount=1; render.pClearValues=&clear;
             vkCmdBeginRenderPass(commands,&render,VK_SUBPASS_CONTENTS_INLINE);
             VkVertexInputBindingDescription2EXT binding{VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT};
-            binding.stride=8; binding.inputRate=VK_VERTEX_INPUT_RATE_VERTEX; binding.divisor=1;
+            binding.stride=test>=17?16:8; binding.inputRate=VK_VERTEX_INPUT_RATE_VERTEX; binding.divisor=1;
             VkVertexInputAttributeDescription2EXT attr{VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT};
-            attr.format=VK_FORMAT_R32G32_SFLOAT; attr.offset=test==8?544:test==1 || test==4?384:test==2?448:test==3?512:test==5?192:0;
+            attr.format=VK_FORMAT_R32G32_SFLOAT; attr.offset=test==8 || test==9?544:test==1 || test==4?384:test==2?448:test==3 || test==10?512:test==5 || test==11?192:0;
+            if(test>=17) {attr.format=VK_FORMAT_R32G32B32A32_SFLOAT; attr.offset=960;}
             vkCmdSetVertexInputEXT(commands,1,&binding,1,&attr);
             VkDeviceSize zero=0; vkCmdBindVertexBuffers(commands,0,1,&buffer,&zero);
             vkCmdBindPipeline(commands,VK_PIPELINE_BIND_POINT_GRAPHICS,draw_pipeline);
-            vkCmdSetRasterizerDiscardEnableEXT(commands,VK_FALSE); vkCmdSetDepthBiasEnableEXT(commands,VK_FALSE);
-            vkCmdSetPrimitiveRestartEnableEXT(commands,test==8);
+            vkCmdSetRasterizerDiscardEnableEXT(commands,VK_FALSE); vkCmdSetDepthBiasEnableEXT(commands,test>=17 && test<20);
+            vkCmdSetPrimitiveRestartEnableEXT(commands,(test>=8 && test<=11) || test==21 || test==22);
+            if(state3_test) {
+               SEVEN_FN(vkCmdSetDepthClampEnableEXT); SEVEN_FN(vkCmdSetDepthClipEnableEXT);
+               SEVEN_FN(vkCmdSetSampleMaskEXT); SEVEN_FN(vkCmdSetAlphaToCoverageEnableEXT);
+               vkCmdSetDepthClampEnableEXT(commands,test==13);
+               vkCmdSetDepthClipEnableEXT(commands,test!=13);
+               VkSampleMask mask=test==12?0:~0u; vkCmdSetSampleMaskEXT(commands,VK_SAMPLE_COUNT_1_BIT,&mask);
+               vkCmdSetAlphaToCoverageEnableEXT(commands,test==13);
+               SEVEN_FN(vkCmdSetColorBlendEnableEXT); SEVEN_FN(vkCmdSetColorBlendEquationEXT);
+               SEVEN_FN(vkCmdSetColorWriteMaskEXT); SEVEN_FN(vkCmdSetRasterizationSamplesEXT); SEVEN_FN(vkCmdSetDepthBias);
+               VkBool32 blend_enabled=test==15 || test==16;
+               VkColorBlendEquationEXT equation{VK_BLEND_FACTOR_ZERO,VK_BLEND_FACTOR_ONE,VK_BLEND_OP_ADD,
+                  VK_BLEND_FACTOR_ZERO,VK_BLEND_FACTOR_ONE,VK_BLEND_OP_ADD};
+               if(test==16) {equation.srcColorBlendFactor=VK_BLEND_FACTOR_ONE; equation.dstColorBlendFactor=VK_BLEND_FACTOR_ZERO;}
+               VkColorComponentFlags write_mask=test==14?0:15;
+               vkCmdSetColorBlendEnableEXT(commands,0,1,&blend_enabled);
+               vkCmdSetColorBlendEquationEXT(commands,0,1,&equation);
+               vkCmdSetColorWriteMaskEXT(commands,0,1,&write_mask);
+               vkCmdSetRasterizationSamplesEXT(commands,VK_SAMPLE_COUNT_1_BIT);
+               vkCmdSetDepthBias(commands,0,test==18?.03f:test==19?-.03f:0,test==19?-2:2);
+            }
             if(extended1) {
                SEVEN_FN(vkCmdSetCullModeEXT); SEVEN_FN(vkCmdSetFrontFaceEXT); SEVEN_FN(vkCmdSetPrimitiveTopologyEXT);
                SEVEN_FN(vkCmdSetViewportWithCountEXT); SEVEN_FN(vkCmdSetScissorWithCountEXT);
-               vkCmdSetCullModeEXT(commands,VK_CULL_MODE_NONE); vkCmdSetFrontFaceEXT(commands,VK_FRONT_FACE_COUNTER_CLOCKWISE);
+               vkCmdSetCullModeEXT(commands,test==23 || test==25?VK_CULL_MODE_BACK_BIT:test==24 || test==26?VK_CULL_MODE_FRONT_BIT:VK_CULL_MODE_NONE);
+               vkCmdSetFrontFaceEXT(commands,VK_FRONT_FACE_COUNTER_CLOCKWISE);
                vkCmdSetPrimitiveTopologyEXT(commands,ia.topology);
                vkCmdSetViewportWithCountEXT(commands,1,&viewport); vkCmdSetScissorWithCountEXT(commands,1,&scissor);
             }
-            if(test==8) {
+            if(test==21 || test==22) {
+               vkCmdBindIndexBuffer(commands,buffer,1056,VK_INDEX_TYPE_UINT16);
+               if(test==22) vkCmdDrawIndexedIndirect(commands,buffer,1072,1,sizeof(patch_indirect));
+               else vkCmdDrawIndexed(commands,8,1,0,0,0);
+            } else if(test>=9 && test<=11) {
+               vkCmdBindIndexBuffer(commands,buffer,test==9?832:test==10?864:896,test==10?VK_INDEX_TYPE_UINT32:VK_INDEX_TYPE_UINT16);
+               vkCmdDrawIndexed(commands,test==9?10:test==10?6:4,1,0,0,0);
+            } else if(test==8) {
                vkCmdBindIndexBuffer(commands,buffer,800,VK_INDEX_TYPE_UINT16);
                vkCmdDrawIndexed(commands,7,1,0,0,0);
             } else if(test==4) {
@@ -449,21 +594,57 @@ static void dozen_seven_smoke(VkInstance instance, VkPhysicalDevice physical,
                if((pixels[i]==0xff000000u)!=(first_pixels[i]==0xff000000u)) throw std::runtime_error("Provoking changed geometry coverage");
                if(pixels[i]==0xff000000u) continue;
                drawn++;
+               if(test>=17) {
+                  float z=test==30 || test==31?(i/32<16 && i%32>=16?.75f:.25f):test>=20?.25f+.5f*(float(i%32)+.5f-8)/16:
+                     (i/32<16 && i%32>=16)? .75f:.25f;
+                  float bias=test>=20?0:test==18?.03f:test==19?-.03f:.0625f;
+                  int expected=int((z+bias)*255+.5f);
+                  if(std::abs(int(pixels[i]&255)-expected)>1) throw std::runtime_error("Point slope bias/clamp readback mismatch case="+std::to_string(test)+" value="+std::to_string(pixels[i]&255));
+                  continue;
+               }
                // Line rasterization may evaluate interpolation off the pixel centre.
-               if((pixels[i]&0xff00u)!=0xff00u || ((test!=3 && test!=5 && test!=7) && (pixels[i]&0xff0000u)!=0xff0000u))
+               if((pixels[i]&0xff00u)!=0xff00u || ((test!=3 && test!=5 && test!=7 && test!=10 && test!=11) && (pixels[i]&0xff0000u)!=0xff0000u))
                   throw std::runtime_error("Provoking float/smooth payload mismatch case="+std::to_string(test));
-               uint32_t delta=test==2 || test==3 || test==7?1:2;
+               uint32_t delta=test==11?0:test==2 || test==3 || test==7 || test==10?1:2;
                uint32_t expected=(first_pixels[i]&255)+(mode?delta:0);
                if((pixels[i]&255)!=expected) throw std::runtime_error("Provoking integer mismatch case="+std::to_string(test)+" first="+std::to_string(first_pixels[i]&255)+" actual="+std::to_string(pixels[i]&255));
             }
             vkUnmapMemory(device,buffer_memory);
-            if(!drawn) throw std::runtime_error("Provoking probe produced no fragments");
+            if(test==12 || test==14 || test==15 || test==24 || test==25 ? drawn!=0 : !drawn)
+               throw std::runtime_error("Provoking/state3 fragment count mismatch case="+std::to_string(test));
             vkDestroyPipeline(device,draw_pipeline,nullptr);
             std::cout << "PASS: provoking FIRST/LAST uint/float/coverage case " << test << " mode " << mode << '\n';
          }
       }
+      if(state3_test) {
+         pi.pTessellationState=nullptr; pi.pStages=stages; pi.stageCount=2;
+         rast.polygonMode=VK_POLYGON_MODE_FILL;
+         VkPipelineRasterizationLineStateCreateInfoEXT line_state{
+            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT};
+         rast.pNext=&line_state; ia.topology=VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+         auto get_features2=reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(get(instance,"vkGetPhysicalDeviceFeatures2"));
+         VkPhysicalDeviceLineRasterizationFeaturesEXT line_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT};
+         VkPhysicalDeviceFeatures2 line_query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; line_query.pNext=&line_features;
+         get_features2(physical,&line_query);
+         const VkLineRasterizationModeEXT line_modes[]={VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT,
+            VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT,VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT};
+         const VkBool32 supported[]={line_features.bresenhamLines,line_features.rectangularLines,line_features.smoothLines};
+         for(unsigned line_test=0;line_test<3;line_test++) {
+            if(!supported[line_test]) continue;
+            line_state.lineRasterizationMode=line_modes[line_test];
+            VkPipeline line_pipeline{};
+            check(vkCreateGraphicsPipelines(device,cache,1,&pi,nullptr,&line_pipeline),
+                  "EXT line rasterization pipeline");
+            vkDestroyPipeline(device,line_pipeline,nullptr);
+         }
+         std::cout << "PASS: all advertised non-stippled EXT line rasterization PSOs\n";
+      }
       vkDestroyPipelineCache(device,cache,nullptr); vkDestroyShaderModule(device,provoking_vs,nullptr); vkDestroyShaderModule(device,provoking_fs,nullptr);
       vkDestroyShaderModule(device,triangle_gs,nullptr); vkDestroyShaderModule(device,line_gs,nullptr);
+      if(bias_vs) {vkDestroyShaderModule(device,bias_vs,nullptr); vkDestroyShaderModule(device,bias_fs,nullptr);}
+      if(tcs) {vkDestroyShaderModule(device,tcs,nullptr);vkDestroyShaderModule(device,tes,nullptr);}
+      if(tes_quad) {vkDestroyShaderModule(device,tes_quad,nullptr);vkDestroyShaderModule(device,tes_line,nullptr);vkDestroyShaderModule(device,tes_point,nullptr);}
+      pi.pTessellationState=nullptr;
       rast.pNext=nullptr; rast.polygonMode=VK_POLYGON_MODE_FILL; pi.pStages=stages; pi.stageCount=2;
    }
    for (uint32_t format_test=0; format_test<(contracts?4u:(a4b4g4r4?2u:1u)); format_test++) {

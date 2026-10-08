@@ -51,7 +51,10 @@ class Maintenance11SupportTest(unittest.TestCase):
         self.assertEqual(families.count(".minImageTransferGranularity = { 1, 1, 1 }"), 2)
         self.assertNotRegex(families, r"\.queueFlags\s*=\s*VK_QUEUE_TRANSFER_BIT\s*,")
         self.assertIn("D3D12_COMMAND_LIST_TYPE_DIRECT", families)
-        self.assertIn("D3D12_COMMAND_LIST_TYPE_COMPUTE", families)
+        # Public compute-only queues use direct native lists for raster-based
+        # transfer emulation; their Vulkan queue flags stay compute/transfer.
+        self.assertIn(".queueFlags = VK_QUEUE_COMPUTE_BIT |", families)
+        self.assertEqual(families.count(".Type = D3D12_COMMAND_LIST_TYPE_DIRECT"), 2)
 
     def test_optimal_granularity_property_is_filled_conservatively(self) -> None:
         query = function_body(self.device, "dzn_GetPhysicalDeviceQueueFamilyProperties2")

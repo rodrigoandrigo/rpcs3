@@ -94,7 +94,18 @@ enum dzn_index_type {
    DZN_INDEX_1B_CONVERT,
    DZN_INDEX_2B_STRIP_RESTART,
    DZN_INDEX_4B_STRIP_RESTART,
-   DZN_NUM_INDEX_TYPE,
+   DZN_INDEX_2B_LIST1_RESTART,
+   DZN_INDEX_4B_LIST1_RESTART,
+   DZN_INDEX_2B_LIST2_RESTART,
+   DZN_INDEX_4B_LIST2_RESTART,
+   DZN_INDEX_2B_LIST3_RESTART,
+   DZN_INDEX_4B_LIST3_RESTART,
+   DZN_INDEX_2B_LIST4_RESTART,
+   DZN_INDEX_4B_LIST4_RESTART,
+   DZN_INDEX_2B_LIST6_RESTART,
+   DZN_INDEX_4B_LIST6_RESTART,
+   DZN_INDEX_2B_PATCH_RESTART,
+   DZN_NUM_INDEX_TYPE = DZN_INDEX_2B_PATCH_RESTART + 64,
 };
 
 static inline enum dzn_index_type
@@ -124,6 +135,8 @@ dzn_index_type_from_dxgi_format(DXGI_FORMAT format, bool prim_restart)
 static inline uint8_t
 dzn_index_size(enum dzn_index_type type)
 {
+   if (type >= DZN_INDEX_2B_LIST1_RESTART && type < DZN_NUM_INDEX_TYPE)
+      return (type - DZN_INDEX_2B_LIST1_RESTART) % 2 ? 4 : 2;
    switch (type) {
    case DZN_NO_INDEX:
       return 0;
@@ -159,7 +172,8 @@ struct dzn_meta_blit_key {
          uint32_t resolve_mode : 3;
          uint32_t linear_filter : 1;
          uint32_t stencil_bit : 4;
-         uint32_t padding : 5;
+         uint32_t bit_copy : 4;
+         uint32_t padding : 1;
       };
       const uint64_t u64;
    };
@@ -598,6 +612,15 @@ enum dzn_extended_dynamic_state {
    DZN_DYNAMIC_RESTART = 1 << 11,
    DZN_DYNAMIC_VERTEX_INPUT = 1 << 12,
    DZN_DYNAMIC_VERTEX_STRIDE = 1 << 13,
+   DZN_DYNAMIC_DEPTH_CLAMP = 1 << 14,
+   DZN_DYNAMIC_DEPTH_CLIP = 1 << 15,
+   DZN_DYNAMIC_SAMPLE_MASK = 1 << 16,
+   DZN_DYNAMIC_ALPHA_TO_COVERAGE = 1 << 17,
+   DZN_DYNAMIC_BLEND_ENABLE = 1 << 18,
+   DZN_DYNAMIC_BLEND_EQUATION = 1 << 19,
+   DZN_DYNAMIC_COLOR_MASK = 1 << 20,
+   DZN_DYNAMIC_SAMPLES = 1 << 21,
+   DZN_DYNAMIC_CONSERVATIVE = 1 << 22,
 };
 
 struct dzn_extended_state {
@@ -606,6 +629,12 @@ struct dzn_extended_state {
    VkPrimitiveTopology topology;
    uint32_t depth_test, depth_write, depth_bounds_test, stencil_test;
    uint32_t discard, depth_bias_enable, restart;
+   uint32_t depth_clamp, depth_clip, sample_mask, alpha_to_coverage;
+   VkSampleCountFlagBits samples;
+   VkConservativeRasterizationModeEXT conservative;
+   uint32_t blend_enable[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
+   VkColorBlendEquationEXT blend_equation[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
+   VkColorComponentFlags color_mask[D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT];
    VkCompareOp depth_compare;
    struct {
       VkStencilOp fail, pass, depth_fail;
@@ -1053,6 +1082,8 @@ struct dzn_graphics_pipeline {
 
    struct {
       bool triangle_fan;
+      VkPrimitiveTopology vk_topology;
+      VkPrimitiveTopology raster_topology;
       D3D_PRIMITIVE_TOPOLOGY topology;
    } ia;
 
@@ -1060,6 +1091,7 @@ struct dzn_graphics_pipeline {
       unsigned count;
       bool dynamic;
       D3D12_VIEWPORT desc[MAX_VP];
+      float min_depth, max_depth;
    } vp;
 
    struct {
@@ -1097,6 +1129,7 @@ struct dzn_graphics_pipeline {
    } blend;
 
    bool rast_disabled_from_missing_position;
+   bool explicit_depth_clip;
    bool use_gs_for_polygon_mode_point;
    bool use_gs_for_provoking_vertex;
    bool provoking_vertex_last;
@@ -1115,6 +1148,8 @@ struct dzn_graphics_pipeline {
          uint32_t rast;
          uint32_t ds;
          uint32_t blend;
+         uint32_t sample_mask;
+         uint32_t samples;
          uint32_t ps, input_layout, topology, so;
       } desc_offsets;
       D3D12_INPUT_ELEMENT_DESC inputs[D3D12_VS_INPUT_REGISTER_COUNT];

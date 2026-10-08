@@ -353,3 +353,181 @@ This is not Vulkan CTS certification. XFB preservation properties remain false
 and transform feedback remains disabled; synthetic-stage pipeline-statistics
 accounting and UWP/Xbox runtime coverage are not established by these tests.
 No RPCS3/frontend integration or package changes were made.
+
+### List restart / EDS3 follow-up (2026-10-07)
+
+`VK_EXT_primitive_topology_list_restart` is advertised with
+`primitiveTopologyListRestart=true` and `primitiveTopologyPatchListRestart=false`
+(tessellation remains unsupported). A serial GPU compute pass builds complete
+point/line/triangle/adjacency list primitives, drops restart markers and discards
+incomplete primitives at markers or end-of-draw. It handles 16/32-bit native
+indices and consumes the existing GPU-widened uint8 path. Direct indexed draws
+reuse the indirect rewriting path; indirect/count draws retain GPU arguments.
+The generated output allocation is bounded by input index count. Native strip
+cut is disabled for lists. Static topology is now retained explicitly so restart
+selection and LAST_VERTEX do not accidentally use an unset dynamic topology.
+
+`VK_EXT_extended_dynamic_state3` advertises four optional feature bits:
+DepthClampEnable, DepthClipEnable, SampleMask and AlphaToCoverageEnable. Their
+commands update masked PSO cache keys and D3D12 rasterizer/sample-mask/blend
+descriptors. Explicit depth clip overrides the implicit inverse-clamp default.
+Other EDS3 bits remain false, including dynamic polygon mode, sample count,
+blend equations and provoking vertex. Multisample/blend state is retained when
+initial rasterizer discard is ignored by a dynamic pipeline.
+
+MSVC Store/APPCONTAINER build/link passed. Native `--topology-state3` passed 28
+FIRST/LAST rendering cases, including uint16 triangle-list restart with incomplete
+primitives, uint32 line-list restart, point-list restart and zero dynamic sample
+mask. The alpha/clip/clamp commands were exercised on a single-sample target;
+this is not exhaustive multisample/depth conformance. `--provoking`, `--four-core`,
+`--six-core`, `--contracts` and `--present` also passed. Source suite: 279 tests,
+one skipped; scaffold suite: six passed. Matrix: 177 candidates, 54 implemented,
+123 pending, zero pending advertised. Logs: `build-uwp-msvc/dozen-new-four-*.log`.
+
+The requested `VK_KHR_maintenance8` and `VK_EXT_depth_range_unrestricted` are
+**not implemented or advertised by this follow-up**. Maintenance8 still needs
+matching color/depth/stencil copy-aspect mapping, relaxed 3D-to-array blits and
+all-stage ownership-transfer handling, plus validation of dynamic offsets and
+internally synchronized cache merges. Depth-range unrestricted needs an emulated
+depth path: native D3D12 viewport MinDepth/MaxDepth are limited to [0,1], and
+merely clamping inputs would violate the Vulkan extension. References:
+[maintenance8](https://github.khronos.org/Vulkan-Site/features/latest/features/proposals/VK_KHR_maintenance8.html),
+[unrestricted depth](https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_depth_range_unrestricted.html),
+[D3D12 viewport](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_viewport).
+The four-extension request therefore remains partially completed. No RPCS3,
+frontend, package, installed UWP/Xbox or Vulkan CTS run was performed.
+
+### Point bias / tessellation / EDS3 continuation (2026-10-07)
+
+This continuation supersedes the feature subset described above. Polygon-point
+geometry expansion now computes window-space triangle depth gradients and applies
+slope-scaled bias, signed clamp and viewport-depth conversion. The native probe
+checks positive slope bias and positive/negative clamp with pixel readback.
+Degenerate zero-depth-range viewport bias and exhaustive viewport/MSAA coverage
+are not established by these tests.
+
+Tessellation and `primitiveTopologyPatchListRestart` are enabled. Patch restart
+uses GPU rewriting for patch widths 1 through 32, with separate 16/32-bit paths.
+Pipeline shader caches include patch size and tessellation domain origin; input
+patch arrays and PatchVertices are lowered to the pipeline configuration. Native
+readback covers direct/indirect restarted patches, both domain origins/cull
+directions, triangle/quad/isoline domains and point mode. A compiler heap
+corruption was fixed: detached NIR variables allocated in the GC arena must not
+be passed to ralloc_free when removing isoline inner tessellation levels.
+
+EDS3 additionally supports ColorBlendEnable, ColorBlendEquation, ColorWriteMask
+and RasterizationSamples, plus ConservativeRasterizationMode and
+ExtraPrimitiveOverestimationSize when the hardware conservative-rasterization
+tier supports them. Extra overestimation remains limited to zero as reported by
+the device properties. Blend/mask readback is covered; rasterization-sample
+commands were exercised at one sample, not exhaustive MSAA conformance.
+The other optional EDS3 features remain disabled.
+
+Maintenance8 has preparatory copy-aspect, 3D blit and ownership-transfer changes,
+but remains disabled: exact matching-format multisample depth/stencil copies and
+the complete extension contract still require implementation/verification.
+Depth-range unrestricted remains disabled and unimplemented. This request is
+therefore still incomplete; no package, frontend integration, Xbox or CTS run
+is implied by the local MSVC build and native probes.
+
+### Device fault, line rasterization and 2D views of 3D images (2026-10-07)
+
+`VK_EXT_device_fault` is advertised with `deviceFault=true` and
+`deviceFaultVendorBinary=false`. `vkGetDeviceFaultInfoEXT` reports the stable
+HRESULT returned by `ID3D12Device::GetDeviceRemovedReason`; address/vendor arrays
+and binary size are consistently zero. This is the complete supported EXT
+feature subset and does not claim DRED vendor dumps unavailable to the UWP path.
+
+`VK_EXT_line_rasterization` and its promoted `VK_KHR_line_rasterization` alias
+are advertised. Bresenham maps to D3D12 aliased lines. On devices exposing
+Rasterizer2 narrow quadrilateral lines, rectangular and rectangular-smooth map
+to QUADRILATERAL_NARROW and ALPHA_ANTIALIASED. All stippled feature bits remain
+false, so the stipple command has no valid enabled-feature use. The native probe
+creates every line-mode PSO advertised by the active adapter.
+
+`VK_EXT_image_2d_view_of_3d` is advertised with the storage-image feature only:
+`image2DViewOf3D=true`, `sampler2DViewOf3D=false`. A Vulkan 2D storage view of a
+3D image creates a D3D12 3D UAV restricted by FirstWSlice/WSize. Native compute
+testing writes through a 2D image descriptor to slice one and verifies the exact
+RGBA8 value through a 3D-image copy/readback; the D3D12 debug run reports no
+resource-dimension error.
+
+`VK_EXT_attachment_feedback_loop_layout` and
+`VK_EXT_attachment_feedback_loop_dynamic_state` remain deliberately unadvertised.
+D3D12 forbids combining a write resource state (RTV/DEPTH_WRITE) with an SRV read
+state for the same subresource. Correct support therefore requires per-draw
+snapshot resources plus descriptor redirection (including push, ordinary and
+bindless descriptor paths), and equivalent color, depth/stencil and MSAA handling.
+Treating the feedback layout as COMMON or ignoring the dynamic command would be
+an invalid implementation, so these two requested extensions are not complete.
+
+### Matching copies and arithmetic continuation (2026-10-07)
+
+Matching color/depth/stencil copies now select source and destination aspects
+independently, including barriers, views and output semantics. Partial MSAA
+copies use integer color views to retain float/normalized color encodings;
+D16/D24 SRV values are repacked to their depth-plane integer encodings. Raw
+D32 scratch resources avoid SV_Depth stores for standalone D32 destinations
+and are retained until command-buffer reset/destruction. Whole native MSAA
+copies use a NULL source box. Compute-only Vulkan queues use native direct
+lists so internal raster-based transfer operations are legal to D3D12; this
+does not relax Vulkan's public queue restrictions for matching DS copies.
+
+Integer MSAA clears use a constant-output integer pixel shader, rather than
+a float clear or the invalid single-sample buffer-to-MSAA fallback. Clears
+restore predication and dirty native graphics state. The meta fragment-shader
+cache now inserts the same encoded u32 key used by lookup, rather than a
+temporary stack address. DXIL SMod now uses SRem plus a sign/nonzero correction,
+instead of unsigned remainder; a runtime-input SPIR-V arithmetic probe covers
+1024 invocations with operands of both signs.
+
+`--copy-contracts` covers twelve single-sample format pairs and twelve complete/
+partial four-sample cases, checking bytes and untouched destination pixels.
+These are **internal backend probes**, not valid extension-conformance evidence
+while maintenance8 is disabled. The optional `DZN_TEST_SPECIAL_DEPTH=1` probe
+also checks NaN payload, negative float, subnormal float and infinity. Subnormal
+D32 currently fails: input `0x00000100` reads back as zero, while independent
+source-image resolve/readback confirms input bits are present. Both whole native
+and partial-copy diagnostics reproduce it. The raw scratch path preserves the
+NaN and negative-float cases locally, but that does not establish unrestricted
+depth rendering or the complete depth/stencil contract.
+
+Maintenance8 and depth-range unrestricted remain unadvertised. The requested
+EDS3 expansion now also includes its absent base extensions (sample locations,
+rasterization streams and NV-dependent states); those are not implemented by
+this continuation. The overall request remains incomplete. No RPCS3/frontend,
+package, installed UWP/Xbox or CTS changes/tests were made.
+
+Verification after these changes: MSVC Store/APPCONTAINER compile/link passed;
+283 source tests passed with one skipped, and six scaffold tests passed. The
+normal internal copy probe passed 24 cases on each of graphics and compute-only
+queue families. `--topology-state3`, `--provoking`, `--four-core`, `--six-core`,
+`--contracts` and `--present` passed again. Optional special-depth testing remains
+FAIL at the subnormal case; it is not part of the passing normal-case count.
+Matrix remains 54 implemented / 123 pending / zero pending advertised.
+
+### D32 subnormal isolation (2026-10-07)
+
+The copy probe now supplies independent controls instead of assuming that the
+source readback alone identifies the failing stage. With
+`DZN_TEST_SPECIAL_DEPTH=1` and `DZN_TEST_FULL_DEPTH=1`, set exactly one of:
+
+- `DZN_TEST_INTEGER_CONTROL=1`: replace the intermediate D32 image with
+  R32_UINT, keeping the copy/resolve/readback sequence. All 28 cases pass.
+- `DZN_TEST_FLOAT_CONTROL=1`: replace it with R32_SFLOAT. All 28 full-copy
+  cases pass. This mode rejects partial tests because ordinary color blits
+  have numerical semantics, not the matching-aspect bit-copy contract.
+- Neither: retain D32. Case 26 still fails with `actual=0`, `expected=256`,
+  `source=256` on the AMD Radeon RX 6600M used by the probe.
+
+`DZN_TEST_DEPTH_ATTACHMENT=1` additionally requests depth/stencil attachment
+usage for intermediate depth images. All 24 normal cases pass, but case 26
+still fails. The failure is therefore specific to the depth-resource route
+in these local tests, not to all float storage or the integer source clear.
+This is not proof of an unavoidable hardware limitation: native driver behavior
+and backend synchronization/resource interpretation still need isolation.
+
+No production workaround or additional extension feature was enabled by this
+diagnostic change. Maintenance8, unrestricted depth and the absent EDS3 base
+extensions remain incomplete. No error tolerance or expected-zero adjustment
+was added to the failing bit comparison.

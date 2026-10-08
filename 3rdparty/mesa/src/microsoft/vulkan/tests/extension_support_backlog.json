@@ -4,6 +4,12 @@
   "reviewed_candidate_count": 177,
   "review_input_sha256": "152da9ded4d05e2b15539221406d42d15ef171b1687cc7958508ae038e93f3b2",
   "implemented_fields": [
+    "EXT_device_fault",
+    "EXT_line_rasterization",
+    "EXT_image_2d_view_of_3d",
+    "KHR_line_rasterization",
+    "EXT_extended_dynamic_state3",
+    "EXT_primitive_topology_list_restart",
     "EXT_index_type_uint8",
     "KHR_index_type_uint8",
     "KHR_maintenance5",
@@ -249,18 +255,6 @@
       ]
     },
     {
-      "field": "EXT_device_fault",
-      "extension": "VK_EXT_device_fault",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: deviceFault; no complete Dozen backend handler for: vkGetDeviceFaultInfoEXT; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkDeviceFaultAddressInfoEXT, VkDeviceFaultAddressTypeEXT, VkDeviceFaultCountsEXT, VkDeviceFaultInfoEXT, VkDeviceFaultVendorBinaryHeaderVersionEXT, VkDeviceFaultVendorBinaryHeaderVersionOneEXT, VkDeviceFaultVendorInfoEXT, VkPhysicalDeviceFaultFeaturesEXT.",
-      "group_tags": [
-        "comandos",
-        "features",
-        "promovida-ou-substituida",
-        "dependencias"
-      ]
-    },
-    {
       "field": "EXT_device_generated_commands",
       "extension": "VK_EXT_device_generated_commands",
       "decision_category": "missing_backend_commands",
@@ -289,17 +283,6 @@
       "group_tags": [
         "comandos",
         "plataforma-ou-wsi",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "EXT_extended_dynamic_state3",
-      "extension": "VK_EXT_extended_dynamic_state3",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits explicitly false: alphaToOne, logicOp, tessellationShader; feature bits have no explicit Dozen assignment: geometryStreams; no complete Dozen backend handler for: vkCmdSetAlphaToCoverageEnableEXT (common helper only), vkCmdSetAlphaToOneEnableEXT (common helper only), vkCmdSetColorBlendAdvancedEXT (common helper only), vkCmdSetColorBlendEnableEXT (common helper only), vkCmdSetColorBlendEquationEXT (common helper only), vkCmdSetColorWriteMaskEXT (common helper only), vkCmdSetConservativeRasterizationModeEXT (common helper only), vkCmdSetCoverageModulationModeNV (common helper only), vkCmdSetCoverageModulationTableEnableNV (common helper only), vkCmdSetCoverageModulationTableNV (common helper only), vkCmdSetCoverageReductionModeNV (common helper only), vkCmdSetCoverageToColorEnableNV (common helper only), vkCmdSetCoverageToColorLocationNV (common helper only), vkCmdSetDepthClampEnableEXT (common helper only), vkCmdSetDepthClipEnableEXT (common helper only), vkCmdSetDepthClipNegativeOneToOneEXT (common helper only), vkCmdSetExtraPrimitiveOverestimationSizeEXT (common helper only), vkCmdSetLineRasterizationModeEXT (common helper only), vkCmdSetLineStippleEnableEXT (common helper only), vkCmdSetLogicOpEnableEXT (common helper only), vkCmdSetPolygonModeEXT (common helper only), vkCmdSetProvokingVertexModeEXT (common helper only), vkCmdSetRasterizationSamplesEXT (common helper only), vkCmdSetRasterizationStreamEXT (common helper only), vkCmdSetRepresentativeFragmentTestEnableNV (common helper only), vkCmdSetSampleLocationsEnableEXT (common helper only), vkCmdSetSampleMaskEXT (common helper only), vkCmdSetShadingRateImageEnableNV (common helper only), vkCmdSetTessellationDomainOriginEXT (common helper only), vkCmdSetViewportSwizzleNV (common helper only), vkCmdSetViewportWScalingEnableNV (common helper only).",
-      "group_tags": [
-        "comandos",
-        "features",
         "dependencias"
       ]
     },
@@ -342,16 +325,6 @@
         "comandos",
         "features",
         "promovida-ou-substituida",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "EXT_image_2d_view_of_3d",
-      "extension": "VK_EXT_image_2d_view_of_3d",
-      "decision_category": "feature_not_reported",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: image2DViewOf3D; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDeviceImage2DViewOf3DFeaturesEXT.",
-      "group_tags": [
-        "features",
         "dependencias"
       ]
     },
@@ -406,18 +379,6 @@
       "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: legacyVertexAttributes; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDeviceLegacyVertexAttributesFeaturesEXT, VkPhysicalDeviceLegacyVertexAttributesPropertiesEXT.",
       "group_tags": [
         "features",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "EXT_line_rasterization",
-      "extension": "VK_EXT_line_rasterization",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: rectangularLines, bresenhamLines, smoothLines, stippledRectangularLines, stippledBresenhamLines, stippledSmoothLines; no complete Dozen backend handler for: vkCmdSetLineStippleEXT; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkLineRasterizationModeEXT, VkPhysicalDeviceLineRasterizationFeaturesEXT, VkPhysicalDeviceLineRasterizationPropertiesEXT, VkPipelineRasterizationLineStateCreateInfoEXT.",
-      "group_tags": [
-        "comandos",
-        "features",
-        "promovida-ou-substituida",
         "dependencias"
       ]
     },
@@ -541,16 +502,6 @@
       "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: primitiveRestartIndex; no complete Dozen backend handler for: vkCmdSetPrimitiveRestartIndexEXT (common helper only); required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDevicePrimitiveRestartIndexFeaturesEXT.",
       "group_tags": [
         "comandos",
-        "features",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "EXT_primitive_topology_list_restart",
-      "extension": "VK_EXT_primitive_topology_list_restart",
-      "decision_category": "feature_not_reported",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: primitiveTopologyListRestart; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT.",
-      "group_tags": [
         "features",
         "dependencias"
       ]
@@ -827,18 +778,6 @@
       "group_tags": [
         "comandos",
         "features",
-        "dependencias"
-      ]
-    },
-    {
-      "field": "KHR_line_rasterization",
-      "extension": "VK_KHR_line_rasterization",
-      "decision_category": "missing_backend_commands",
-      "decision_reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: rectangularLines, bresenhamLines, smoothLines, stippledRectangularLines, stippledBresenhamLines, stippledSmoothLines; no complete Dozen backend handler for: vkCmdSetLineStippleKHR; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkLineRasterizationModeKHR, VkPhysicalDeviceLineRasterizationFeaturesKHR, VkPhysicalDeviceLineRasterizationPropertiesKHR, VkPipelineRasterizationLineStateCreateInfoKHR.",
-      "group_tags": [
-        "comandos",
-        "features",
-        "promovida-ou-substituida",
         "dependencias"
       ]
     },
@@ -1363,4 +1302,3 @@
   ],
   "source": "Original round39 review (171 entries, hash above), supplemented by local reviews on 2026-10-07. Current follow-up promotes KHR_present_wait, KHR_maintenance5 and KHR_index_type_uint8 and adds its EXT alias. EXT_transform_feedback remains experimental and unadvertised: point-GS primitive-atomic overflow and new original-position paths are not GPU validated. Policy input and native probes are not Vulkan CTS evidence."
 }
-

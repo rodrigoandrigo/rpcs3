@@ -37,6 +37,39 @@ enum dzn_queue_family_transfer_kind {
    DZN_QUEUE_FAMILY_TRANSFER_EXTERNAL,
 };
 
+static void dzn_cmd_buffer_blit_image(struct dzn_cmd_buffer *cmdbuf,
+                                     const VkBlitImageInfo2 *info, bool bit_copy);
+static void dzn_cmd_buffer_clear_msaa_integer(struct dzn_cmd_buffer *cmdbuf,
+   struct dzn_image *image, VkImageLayout layout, const VkClearColorValue *color,
+   uint32_t range_count, const VkImageSubresourceRange *ranges);
+
+static VkFormat
+dzn_copy_uint_format(const struct dzn_image *image)
+{
+   switch (dzn_get_typeless_dxgi_format(image->desc.Format)) {
+   case DXGI_FORMAT_R8_TYPELESS: return VK_FORMAT_R8_UINT;
+   case DXGI_FORMAT_R16_TYPELESS: return VK_FORMAT_R16_UINT;
+   case DXGI_FORMAT_R32_TYPELESS: return VK_FORMAT_R32_UINT;
+   default: return image->vk.format;
+   }
+}
+
+static enum dzn_blit_bit_copy
+dzn_copy_depth_mode(VkFormat format, bool to_color)
+{
+   switch (format) {
+   case VK_FORMAT_D16_UNORM:
+      return to_color ? DZN_BLIT_COPY_D16_TO_COLOR : DZN_BLIT_COPY_COLOR_TO_D16;
+   case VK_FORMAT_X8_D24_UNORM_PACK32:
+   case VK_FORMAT_D24_UNORM_S8_UINT:
+      return to_color ? DZN_BLIT_COPY_D24_TO_COLOR : DZN_BLIT_COPY_COLOR_TO_D24;
+   case VK_FORMAT_D32_SFLOAT_S8_UINT:
+      return to_color ? DZN_BLIT_COPY_D32_FLOAT_TO_COLOR : DZN_BLIT_COPY_COLOR_TO_D32;
+   default:
+      return to_color ? DZN_BLIT_COPY_D32_TO_COLOR : DZN_BLIT_COPY_COLOR_TO_D32;
+   }
+}
+
 /* Vulkan conditions affect draws/dispatches and explicit attachment clears,
  * not copies, load-op clears, queries
  * or the meta-dispatches used to lower triangle fans and indirect arguments. */
@@ -60,6 +93,36 @@ dzn_cmd_buffer_restart_active(const struct dzn_cmd_buffer *cmdbuf,
            cmdbuf->state.pipeline_variant.extended.restart);
 }
 
+static VkPrimitiveTopology
+dzn_cmd_buffer_topology(const struct dzn_cmd_buffer *cmdbuf,
+                       const struct dzn_graphics_pipeline *pipeline)
+{
+   return pipeline->extended_dynamic & DZN_DYNAMIC_TOPOLOGY ?
+      cmdbuf->state.pipeline_variant.extended.topology : pipeline->ia.vk_topology;
+}
+
+static unsigned
+dzn_cmd_buffer_list_restart_width(const struct dzn_cmd_buffer *cmdbuf,
+                                 const struct dzn_graphics_pipeline *pipeline, bool indexed)
+{
+   if (!indexed ||
+       !dzn_cmd_buffer_restart_active(cmdbuf, pipeline))
+      return 0;
+   if (dzn_cmd_buffer_topology(cmdbuf, pipeline) == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST)
+      return cmdbuf->vk.base.device->enabled_features.primitiveTopologyPatchListRestart ?
+         pipeline->patch_control_points : 0;
+   if (!cmdbuf->vk.base.device->enabled_features.primitiveTopologyListRestart)
+      return 0;
+   switch (dzn_cmd_buffer_topology(cmdbuf, pipeline)) {
+   case VK_PRIMITIVE_TOPOLOGY_POINT_LIST: return 1;
+   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST: return 2;
+   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: return 3;
+   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY: return 4;
+   case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY: return 6;
+   default: return 0;
+   }
+}
+
 static bool
 dzn_cmd_buffer_strip_restart_active(const struct dzn_cmd_buffer *cmdbuf,
                                     const struct dzn_graphics_pipeline *pipeline,
@@ -67,7 +130,7 @@ dzn_cmd_buffer_strip_restart_active(const struct dzn_cmd_buffer *cmdbuf,
 {
    return indexed && pipeline->provoking_vertex_last &&
       (pipeline->use_gs_for_provoking_vertex || pipeline->use_gs_for_polygon_mode_point) &&
-      cmdbuf->state.pipeline_variant.extended.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP &&
+      dzn_cmd_buffer_topology(cmdbuf, pipeline) == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP &&
       dzn_cmd_buffer_restart_active(cmdbuf, pipeline);
 }
 
@@ -1643,6 +1706,8 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
                                  const VkDependencyInfo *info)
 {
    VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
+   const bool ownership_all_stages = info->dependencyFlags &
+      VK_DEPENDENCY_QUEUE_FAMILY_OWNERSHIP_TRANSFER_USE_ALL_STAGES_BIT_KHR;
 
    uint32_t num_barrier_groups = 0;
    D3D12_BARRIER_GROUP groups[3];
@@ -1736,9 +1801,9 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
                   buffer_barriers[i].SyncAfter = D3D12_BARRIER_SYNC_ALL;
                else
                   buffer_barriers[i].SyncBefore = D3D12_BARRIER_SYNC_ALL;
-            } else if (is_release) {
+            } else if (!ownership_all_stages && is_release) {
                buffer_barriers[i].SyncAfter = D3D12_BARRIER_SYNC_NONE;
-            } else {
+            } else if (!ownership_all_stages) {
                buffer_barriers[i].SyncBefore = D3D12_BARRIER_SYNC_NONE;
             }
          }
@@ -1797,9 +1862,9 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
                   buffer_barriers[bbar].SyncAfter = D3D12_BARRIER_SYNC_ALL;
                else
                   buffer_barriers[bbar].SyncBefore = D3D12_BARRIER_SYNC_ALL;
-            } else if (is_release) {
+            } else if (!ownership_all_stages && is_release) {
                buffer_barriers[bbar].SyncAfter = D3D12_BARRIER_SYNC_NONE;
-            } else {
+            } else if (!ownership_all_stages) {
                buffer_barriers[bbar].SyncBefore = D3D12_BARRIER_SYNC_NONE;
             }
          }
@@ -1876,7 +1941,8 @@ dzn_CmdPipelineBarrier2_enhanced(VkCommandBuffer commandBuffer,
             layout_after_valid_access = valid_access_for_layout(texture_barriers[tbar].LayoutAfter);
          }
 
-         if (queue_ownership_transfer) {
+         if (queue_ownership_transfer &&
+             (transfer_kind == DZN_QUEUE_FAMILY_TRANSFER_EXTERNAL || !ownership_all_stages)) {
             if (is_acquire)
                texture_barriers[tbar].SyncBefore = D3D12_BARRIER_SYNC_NONE;
             else
@@ -2524,19 +2590,31 @@ dzn_cmd_buffer_clear_color(struct dzn_cmd_buffer *cmdbuf,
    enum pipe_format pfmt = vk_format_to_pipe_format(image->vk.format);
    D3D12_BARRIER_LAYOUT restore_layout = D3D12_BARRIER_LAYOUT_COMMON;
 
+   if (image->vk.samples > 1 &&
+       (util_format_is_pure_sint(pfmt) || util_format_is_pure_uint(pfmt))) {
+      dzn_cmd_buffer_clear_msaa_integer(cmdbuf, image, layout, col, range_count, ranges);
+      return;
+   }
+
    if (util_format_is_pure_sint(pfmt)) {
       for (uint32_t c = 0; c < ARRAY_SIZE(clear_vals); c++) {
          clear_vals[c] = color.int32[c];
-         if (color.int32[c] != (int32_t)clear_vals[c]) {
-            dzn_cmd_buffer_clear_ranges_with_copy(cmdbuf, image, layout, col, range_count, ranges);
+         if ((double)color.int32[c] != (double)clear_vals[c]) {
+            if (image->vk.samples > 1)
+               dzn_cmd_buffer_clear_msaa_integer(cmdbuf, image, layout, col, range_count, ranges);
+            else
+               dzn_cmd_buffer_clear_ranges_with_copy(cmdbuf, image, layout, col, range_count, ranges);
             return;
          }
       }
    } else if (util_format_is_pure_uint(pfmt)) {
       for (uint32_t c = 0; c < ARRAY_SIZE(clear_vals); c++) {
          clear_vals[c] = color.uint32[c];
-         if (color.uint32[c] != (uint32_t)clear_vals[c]) {
-            dzn_cmd_buffer_clear_ranges_with_copy(cmdbuf, image, layout, col, range_count, ranges);
+         if ((double)color.uint32[c] != (double)clear_vals[c]) {
+            if (image->vk.samples > 1)
+               dzn_cmd_buffer_clear_msaa_integer(cmdbuf, image, layout, col, range_count, ranges);
+            else
+               dzn_cmd_buffer_clear_ranges_with_copy(cmdbuf, image, layout, col, range_count, ranges);
             return;
          }
       }
@@ -2827,8 +2905,10 @@ dzn_cmd_buffer_copy_img_chunk(struct dzn_cmd_buffer *cmdbuf,
    const VkImageSubresourceLayers *dst_subres = &region.dstSubresource;
    VkFormat src_format =
       dzn_image_get_plane_format(src->vk.format, aspect);
+   VkImageAspectFlagBits dst_aspect = dst_subres->aspectMask & aspect ?
+      aspect : (VkImageAspectFlagBits)dst_subres->aspectMask;
    VkFormat dst_format =
-      dzn_image_get_plane_format(dst->vk.format, aspect);
+      dzn_image_get_plane_format(dst->vk.format, dst_aspect);
 
    enum pipe_format src_pfmt = vk_format_to_pipe_format(src_format);
    uint32_t src_blkw = util_format_get_blockwidth(src_pfmt);
@@ -2842,7 +2922,6 @@ dzn_cmd_buffer_copy_img_chunk(struct dzn_cmd_buffer *cmdbuf,
    uint32_t depth = region.extent.depth;
    uint32_t dst_l = l, src_l = l;
 
-   assert(src_subres->aspectMask == dst_subres->aspectMask);
 
    if (src->vk.image_type == VK_IMAGE_TYPE_3D &&
        dst->vk.image_type == VK_IMAGE_TYPE_2D) {
@@ -2860,7 +2939,7 @@ dzn_cmd_buffer_copy_img_chunk(struct dzn_cmd_buffer *cmdbuf,
       assert(src_subres->layerCount == dst_subres->layerCount);
    }
 
-   D3D12_TEXTURE_COPY_LOCATION dst_loc = dzn_image_get_copy_loc(dst, dst_subres, aspect, dst_l);
+   D3D12_TEXTURE_COPY_LOCATION dst_loc = dzn_image_get_copy_loc(dst, dst_subres, dst_aspect, dst_l);
    D3D12_TEXTURE_COPY_LOCATION src_loc = dzn_image_get_copy_loc(src, src_subres, aspect, src_l);
 
    D3D12_BOX src_box = {
@@ -2873,11 +2952,13 @@ dzn_cmd_buffer_copy_img_chunk(struct dzn_cmd_buffer *cmdbuf,
    };
 
    if (!tmp_loc->pResource) {
+      /* D3D12 requires whole-subresource MSAA copies with a NULL source box,
+       * even when the supplied box describes the entire subresource. */
       ID3D12GraphicsCommandList1_CopyTextureRegion(cmdlist, &dst_loc,
                                                    region.dstOffset.x,
                                                    region.dstOffset.y,
                                                    dst_z, &src_loc,
-                                                   &src_box);
+                                                   src->vk.samples > 1 ? NULL : &src_box);
       return;
    }
 
@@ -2920,7 +3001,7 @@ dzn_cmd_buffer_copy_img_chunk(struct dzn_cmd_buffer *cmdbuf,
    }
 
    tmp_desc->Format =
-      dzn_image_get_placed_footprint_format(pdev, dst->vk.format, aspect);
+      dzn_image_get_placed_footprint_format(pdev, dst->vk.format, dst_aspect);
    if (src_blkw != dst_blkw)
       tmp_desc->Width = DIV_ROUND_UP(region.extent.width, src_blkw) * dst_blkw;
    if (src_blkh != dst_blkh)
@@ -2960,14 +3041,15 @@ dzn_cmd_buffer_blit_prepare_src_view(struct dzn_cmd_buffer *cmdbuf,
                                      VkImageAspectFlagBits aspect,
                                      const VkImageSubresourceLayers *subres,
                                      struct dzn_descriptor_heap *heap,
-                                     uint32_t heap_slot)
+                                     uint32_t heap_slot, bool bit_copy)
 {
    struct dzn_device *device = container_of(cmdbuf->vk.base.device, struct dzn_device, vk);
    VK_FROM_HANDLE(dzn_image, img, image);
    VkImageViewCreateInfo iview_info = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
       .image = image,
-      .format = img->vk.format,
+      .format = bit_copy && aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
+         dzn_copy_uint_format(img) : img->vk.format,
       .subresourceRange = {
          .aspectMask = (VkImageAspectFlags)aspect,
          .baseMipLevel = subres->mipLevel,
@@ -3008,7 +3090,7 @@ dzn_cmd_buffer_blit_prepare_dst_view(struct dzn_cmd_buffer *cmdbuf,
                                      struct dzn_image *img,
                                      VkImageAspectFlagBits aspect,
                                      uint32_t level, uint32_t layer,
-                                     const VkOffset3D *dst_offsets)
+                                     const VkOffset3D *dst_offsets, bool bit_copy)
 {
    bool ds = aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
    VkImageSubresourceRange range = {
@@ -3038,6 +3120,8 @@ dzn_cmd_buffer_blit_prepare_dst_view(struct dzn_cmd_buffer *cmdbuf,
       }
    } else {
       D3D12_RENDER_TARGET_VIEW_DESC desc = dzn_image_get_rtv_desc(img, &range, 0);
+      if (bit_copy)
+         desc.Format = dzn_buffer_get_dxgi_format(dzn_copy_uint_format(img));
       D3D12_CPU_DESCRIPTOR_HANDLE handle = dzn_cmd_buffer_get_rtv(cmdbuf, img, &desc);
       ID3D12GraphicsCommandList1_OMSetRenderTargets(cmdbuf->cmdlist, 1, &handle, false, NULL);
    }
@@ -3047,21 +3131,24 @@ static void
 dzn_cmd_buffer_blit_set_pipeline(struct dzn_cmd_buffer *cmdbuf,
                                  const struct dzn_image *src,
                                  const struct dzn_image *dst,
+                                 VkImageAspectFlagBits src_aspect,
                                  VkImageAspectFlagBits aspect,
                                  VkFilter filter,
                                  enum dzn_blit_resolve_mode resolve_mode,
-                                 uint32_t stencil_bit)
+                                 uint32_t stencil_bit, bool bit_copy)
 {
    struct dzn_device *device = container_of(cmdbuf->vk.base.device, struct dzn_device, vk);
    struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
    assert(pdev->options.PSSpecifiedStencilRefSupported || aspect != VK_IMAGE_ASPECT_STENCIL_BIT || stencil_bit != 0xf);
-   enum pipe_format pfmt = vk_format_to_pipe_format(dst->vk.format);
+   VkFormat out_format = bit_copy && aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
+      dzn_copy_uint_format(dst) : dst->vk.format;
+   enum pipe_format pfmt = vk_format_to_pipe_format(out_format);
    VkImageUsageFlags usage =
       vk_format_is_depth_or_stencil(dst->vk.format) ?
       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT :
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
    struct dzn_meta_blit_key ctx_key = {
-      .out_format = dzn_image_get_dxgi_format(pdev, dst->vk.format, usage, aspect),
+      .out_format = dzn_image_get_dxgi_format(pdev, out_format, usage, aspect),
       .samples = (uint32_t)src->vk.samples,
       .loc = (uint32_t)(aspect == VK_IMAGE_ASPECT_DEPTH_BIT ?
                         FRAG_RESULT_DEPTH :
@@ -3081,6 +3168,11 @@ dzn_cmd_buffer_blit_set_pipeline(struct dzn_cmd_buffer *cmdbuf,
       /* Filter doesn't need to be part of the key if we're not embedding a static sampler */
       .linear_filter = filter == VK_FILTER_LINEAR && device->support_static_samplers,
       .stencil_bit = stencil_bit,
+      .bit_copy = !bit_copy ? DZN_BLIT_COPY_NONE :
+         src_aspect == VK_IMAGE_ASPECT_DEPTH_BIT && aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
+            dzn_copy_depth_mode(src->vk.format, true) :
+         src_aspect == VK_IMAGE_ASPECT_COLOR_BIT && aspect == VK_IMAGE_ASPECT_DEPTH_BIT ?
+            dzn_copy_depth_mode(dst->vk.format, false) : DZN_BLIT_COPY_UINT,
       .padding = 0,
    };
 
@@ -3167,6 +3259,8 @@ dzn_cmd_buffer_blit_issue_barriers(struct dzn_cmd_buffer *cmdbuf,
                                    D3D12_BARRIER_LAYOUT *restore_dst_layout,
                                    bool post)
 {
+   VkImageAspectFlagBits dst_aspect = dst_subres->aspectMask & aspect ?
+      aspect : (VkImageAspectFlagBits)dst_subres->aspectMask;
    VkImageSubresourceRange src_range = {
       .aspectMask = aspect,
       .baseMipLevel = src_subres->mipLevel,
@@ -3175,7 +3269,7 @@ dzn_cmd_buffer_blit_issue_barriers(struct dzn_cmd_buffer *cmdbuf,
       .layerCount = src_subres->layerCount,
    };
    VkImageSubresourceRange dst_range = {
-      .aspectMask = aspect,
+      .aspectMask = dst_aspect,
       .baseMipLevel = dst_subres->mipLevel,
       .levelCount = 1,
       .baseArrayLayer = dst_subres->baseArrayLayer,
@@ -3184,7 +3278,7 @@ dzn_cmd_buffer_blit_issue_barriers(struct dzn_cmd_buffer *cmdbuf,
 
    if (!post) {
       if (cmdbuf->enhanced_barriers) {
-         D3D12_BARRIER_LAYOUT dst_new_layout = (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) ?
+         D3D12_BARRIER_LAYOUT dst_new_layout = (dst_aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) ?
             D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE : D3D12_BARRIER_LAYOUT_RENDER_TARGET;
          *restore_src_layout = dzn_cmd_buffer_require_layout(cmdbuf, src, src_layout,
                                                              D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ,
@@ -3194,7 +3288,7 @@ dzn_cmd_buffer_blit_issue_barriers(struct dzn_cmd_buffer *cmdbuf,
                                                              dst_new_layout,
                                                              &dst_range);
       } else {
-         VkImageLayout dst_new_layout = (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) ?
+         VkImageLayout dst_new_layout = (dst_aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) ?
                                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
          dzn_cmd_buffer_queue_image_range_layout_transition(cmdbuf, src, &src_range,
                                                             src_layout,
@@ -3211,7 +3305,7 @@ dzn_cmd_buffer_blit_issue_barriers(struct dzn_cmd_buffer *cmdbuf,
                                        D3D12_BARRIER_SYNC_PIXEL_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
                                        D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ, *restore_src_layout,
                                        &src_range);
-         if ((aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))) {
+         if ((dst_aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))) {
             dzn_cmd_buffer_restore_layout(cmdbuf, dst,
                                           D3D12_BARRIER_SYNC_DEPTH_STENCIL, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE,
                                           D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE, *restore_dst_layout,
@@ -3223,7 +3317,7 @@ dzn_cmd_buffer_blit_issue_barriers(struct dzn_cmd_buffer *cmdbuf,
                                           &dst_range);
          }
       } else {
-         VkImageLayout dst_new_layout = (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) ?
+         VkImageLayout dst_new_layout = (dst_aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) ?
                                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
          dzn_cmd_buffer_queue_image_range_layout_transition(cmdbuf, src, &src_range,
                                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -3244,7 +3338,7 @@ dzn_cmd_buffer_blit_region(struct dzn_cmd_buffer *cmdbuf,
                            uint32_t *heap_slot,
                            struct dzn_descriptor_heap *sampler_heap,
                            uint32_t sampler_heap_slot,
-                           uint32_t r)
+                           uint32_t r, bool bit_copy)
 {
    VK_FROM_HANDLE(dzn_image, src, info->srcImage);
    VK_FROM_HANDLE(dzn_image, dst, info->dstImage);
@@ -3260,16 +3354,18 @@ dzn_cmd_buffer_blit_region(struct dzn_cmd_buffer *cmdbuf,
    assert(device->support_static_samplers == (sampler_heap == NULL));
 
    dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
+      VkImageAspectFlagBits dst_aspect = region->dstSubresource.aspectMask & aspect ?
+         aspect : (VkImageAspectFlagBits)region->dstSubresource.aspectMask;
       D3D12_BARRIER_LAYOUT restore_src_layout = D3D12_BARRIER_LAYOUT_COMMON;
       D3D12_BARRIER_LAYOUT restore_dst_layout = D3D12_BARRIER_LAYOUT_COMMON;
-      dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, info->filter, dzn_blit_resolve_none, stencil_bit);
+      dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, dst_aspect, info->filter, dzn_blit_resolve_none, stencil_bit, bit_copy);
       dzn_cmd_buffer_blit_issue_barriers(cmdbuf,
                                          src, info->srcImageLayout, &region->srcSubresource,
                                          dst, info->dstImageLayout, &region->dstSubresource,
                                          aspect, &restore_src_layout, &restore_dst_layout, false);
       dzn_cmd_buffer_blit_prepare_src_view(cmdbuf, info->srcImage,
                                            aspect, &region->srcSubresource,
-                                           heap, (*heap_slot)++);
+                                           heap, (*heap_slot)++, bit_copy);
       dzn_cmd_buffer_blit_set_2d_region(cmdbuf,
                                         src, &region->srcSubresource, region->srcOffsets,
                                         dst, &region->dstSubresource, region->dstOffsets,
@@ -3284,15 +3380,15 @@ dzn_cmd_buffer_blit_region(struct dzn_cmd_buffer *cmdbuf,
          region->srcOffsets[1].z - region->srcOffsets[0].z :
          region->srcOffsets[0].z - region->srcOffsets[1].z;
 
-      uint32_t layer_count = dzn_get_layer_count(src, &region->srcSubresource);
+      uint32_t layer_count = dzn_get_layer_count(dst, &region->dstSubresource);
       uint32_t dst_level = region->dstSubresource.mipLevel;
 
-      float src_slice_step = src_is_3d ? (float)src_depth / dst_depth : 1;
+      uint32_t slice_count = dst_is_3d ? dst_depth : layer_count;
+      float src_slice_step = src_is_3d ? (float)src_depth / slice_count : 1;
       if (region->srcOffsets[0].z > region->srcOffsets[1].z)
          src_slice_step = -src_slice_step;
       float src_z_coord =
          src_is_3d ? (float)region->srcOffsets[0].z + (src_slice_step * 0.5f) : 0;
-      uint32_t slice_count = dst_is_3d ? dst_depth : layer_count;
       uint32_t dst_z_coord =
          dst_is_3d ? region->dstOffsets[0].z : region->dstSubresource.baseArrayLayer;
       if (region->dstOffsets[0].z > region->dstOffsets[1].z)
@@ -3303,22 +3399,22 @@ dzn_cmd_buffer_blit_region(struct dzn_cmd_buffer *cmdbuf,
 
       /* Normalize the src coordinates/step */
       if (src_is_3d) {
-         src_z_coord /= src->vk.extent.depth;
-         src_slice_step /= src->vk.extent.depth;
+         src_z_coord /= u_minify(src->vk.extent.depth, region->srcSubresource.mipLevel);
+         src_slice_step /= u_minify(src->vk.extent.depth, region->srcSubresource.mipLevel);
       }
 
       for (uint32_t slice = 0; slice < slice_count; slice++) {
-         dzn_cmd_buffer_blit_prepare_dst_view(cmdbuf, dst, aspect, dst_level, dst_z_coord, region->dstOffsets);
+         dzn_cmd_buffer_blit_prepare_dst_view(cmdbuf, dst, dst_aspect, dst_level, dst_z_coord, region->dstOffsets, bit_copy);
          ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstants(cmdbuf->cmdlist, 1, 1, &src_z_coord, 16);
          if (!device->support_static_samplers) {
             ID3D12GraphicsCommandList1_SetGraphicsRootDescriptorTable(cmdbuf->cmdlist, 2, dzn_descriptor_heap_get_gpu_handle(sampler_heap, sampler_heap_slot));
             stencil_bit_root_param_slot++;
          }
-         if (aspect == VK_IMAGE_ASPECT_STENCIL_BIT && !support_stencil_blit) {
+         if (dst_aspect == VK_IMAGE_ASPECT_STENCIL_BIT && !support_stencil_blit) {
             cmdbuf->state.dirty |= DZN_CMD_DIRTY_STENCIL_REF;
             ID3D12GraphicsCommandList1_OMSetStencilRef(cmdbuf->cmdlist, 0xff);
             for (stencil_bit = 0; stencil_bit < 8; ++stencil_bit) {
-               dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, info->filter, dzn_blit_resolve_none, stencil_bit);
+               dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, dst_aspect, info->filter, dzn_blit_resolve_none, stencil_bit, bit_copy);
                ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstant(cmdbuf->cmdlist, stencil_bit_root_param_slot, (1 << stencil_bit), 0);
                ID3D12GraphicsCommandList1_DrawInstanced(cmdbuf->cmdlist, 4, 1, 0, 0);
             }
@@ -3374,14 +3470,14 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
    dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
       D3D12_BARRIER_LAYOUT restore_src_layout = D3D12_BARRIER_LAYOUT_COMMON;
       D3D12_BARRIER_LAYOUT restore_dst_layout = D3D12_BARRIER_LAYOUT_COMMON;
-      dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, VK_FILTER_NEAREST, resolve_mode, stencil_bit);
+      dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, aspect, VK_FILTER_NEAREST, resolve_mode, stencil_bit, false);
       dzn_cmd_buffer_blit_issue_barriers(cmdbuf,
                                          src, info->srcImageLayout, &region->srcSubresource,
                                          dst, info->dstImageLayout, &region->dstSubresource,
                                          aspect, &restore_src_layout, &restore_dst_layout, false);
       dzn_cmd_buffer_blit_prepare_src_view(cmdbuf, info->srcImage, aspect,
                                            &region->srcSubresource,
-                                           heap, (*heap_slot)++);
+                                           heap, (*heap_slot)++, false);
 
       VkOffset3D src_offset[2] = {
          {
@@ -3416,7 +3512,7 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
          dzn_cmd_buffer_blit_prepare_dst_view(cmdbuf,
                                               dst, aspect, region->dstSubresource.mipLevel,
                                               region->dstSubresource.baseArrayLayer + layer,
-                                              dst_offset);
+                                              dst_offset, false);
          ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstants(cmdbuf->cmdlist, 1, 1, &src_z_coord, 16);
          if (!device->support_static_samplers) {
             ID3D12GraphicsCommandList1_SetGraphicsRootDescriptorTable(cmdbuf->cmdlist, 2, dzn_descriptor_heap_get_gpu_handle(sampler_heap, sampler_heap_slot));
@@ -3426,7 +3522,7 @@ dzn_cmd_buffer_resolve_region(struct dzn_cmd_buffer *cmdbuf,
             cmdbuf->state.dirty |= DZN_CMD_DIRTY_STENCIL_REF;
             ID3D12GraphicsCommandList1_OMSetStencilRef(cmdbuf->cmdlist8, 0xff);
             for (stencil_bit = 0; stencil_bit < 8; ++stencil_bit) {
-               dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, VK_FILTER_NEAREST, resolve_mode, stencil_bit);
+               dzn_cmd_buffer_blit_set_pipeline(cmdbuf, src, dst, aspect, aspect, VK_FILTER_NEAREST, resolve_mode, stencil_bit, false);
                ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstant(cmdbuf->cmdlist, stencil_bit_root_param_slot, (1 << stencil_bit), 0);
                ID3D12GraphicsCommandList1_DrawInstanced(cmdbuf->cmdlist, 4, 1, 0, 0);
             }
@@ -3505,8 +3601,10 @@ dzn_cmd_buffer_update_pipeline(struct dzn_cmd_buffer *cmdbuf, uint32_t bindpoint
 
          if (gfx->use_gs_for_polygon_mode_point || gfx->use_gs_for_provoking_vertex) {
             const struct dzn_extended_state *extended = &cmdbuf->state.pipeline_variant.extended;
-            VkPrimitiveTopology topology = extended->topology;
+            VkPrimitiveTopology topology = gfx->patch_control_points ? gfx->ia.raster_topology :
+               dzn_cmd_buffer_topology(cmdbuf, gfx);
             cmdbuf->state.sysvals.gfx.provoking_vertex_index = !gfx->provoking_vertex_last ? 0 :
+               topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ? 0 :
                topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ? 1 :
                (topology == VK_PRIMITIVE_TOPOLOGY_LINE_LIST || topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP) ? 1 : 2;
             cmdbuf->state.sysvals.gfx.provoking_strip = gfx->provoking_vertex_last &&
@@ -4032,7 +4130,7 @@ dzn_cmd_buffer_prepare_draw(struct dzn_cmd_buffer *cmdbuf, bool indexed)
    if (pipeline->use_gs_for_provoking_vertex || pipeline->use_gs_for_polygon_mode_point) {
       bool rewritten_strip = dzn_cmd_buffer_strip_restart_active(cmdbuf, pipeline, indexed);
       uint32_t strip = pipeline->provoking_vertex_last && !rewritten_strip &&
-         cmdbuf->state.pipeline_variant.extended.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+         dzn_cmd_buffer_topology(cmdbuf, pipeline) == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
       if (cmdbuf->state.sysvals.gfx.provoking_strip != strip) {
          cmdbuf->state.sysvals.gfx.provoking_strip = strip;
          cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |= DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
@@ -4134,7 +4232,8 @@ dzn_cmd_buffer_triangle_fan_get_max_index_buf_size(struct dzn_cmd_buffer *cmdbuf
       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
 
    if (!dzn_cmd_buffer_triangle_fan_active(cmdbuf, pipeline) &&
-       !dzn_cmd_buffer_strip_restart_active(cmdbuf, pipeline, indexed))
+       !dzn_cmd_buffer_strip_restart_active(cmdbuf, pipeline, indexed) &&
+       !dzn_cmd_buffer_list_restart_width(cmdbuf, pipeline, indexed))
       return 0;
 
    uint32_t max_triangles;
@@ -4142,6 +4241,8 @@ dzn_cmd_buffer_triangle_fan_get_max_index_buf_size(struct dzn_cmd_buffer *cmdbuf
    if (indexed) {
       uint32_t index_size = cmdbuf->state.ib.view.Format == DXGI_FORMAT_R32_UINT ? 4 : 2;
       uint32_t max_indices = cmdbuf->state.ib.view.SizeInBytes / index_size;
+      if (dzn_cmd_buffer_list_restart_width(cmdbuf, pipeline, indexed))
+         return max_indices;
 
       max_triangles = MAX2(max_indices, 2) - 2;
    } else {
@@ -4295,6 +4396,13 @@ dzn_cmd_buffer_patch_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
       if (dzn_cmd_buffer_strip_restart_active(cmdbuf, graphics, *inout_indexed))
          index_type = cmdbuf->state.ib.view.Format == DXGI_FORMAT_R16_UINT ?
             DZN_INDEX_2B_STRIP_RESTART : DZN_INDEX_4B_STRIP_RESTART;
+      unsigned list_width = dzn_cmd_buffer_list_restart_width(cmdbuf, graphics, *inout_indexed);
+      if (list_width) {
+         bool patch = dzn_cmd_buffer_topology(cmdbuf, graphics) == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+         unsigned slot = patch ? list_width - 1 : list_width == 6 ? 4 : list_width - 1;
+         index_type = (patch ? DZN_INDEX_2B_PATCH_RESTART : DZN_INDEX_2B_LIST1_RESTART) + slot * 2 +
+            (cmdbuf->state.ib.view.Format == DXGI_FORMAT_R32_UINT);
+      }
       struct dzn_meta_triangle_fan_rewrite_index *rewrite_index =
          &device->triangle_fan[index_type];
 
@@ -4436,7 +4544,8 @@ dzn_cmd_buffer_indirect_draw(struct dzn_cmd_buffer *cmdbuf,
    draw_type.draw_params = pipeline->needs_draw_sysvals && !pdev->options21.ExtendedCommandInfoSupported;
    draw_type.draw_id = max_draw_count > 1 && pdev->options21.ExecuteIndirectTier < D3D12_EXECUTE_INDIRECT_TIER_1_1;
    draw_type.triangle_fan = dzn_cmd_buffer_triangle_fan_active(cmdbuf, pipeline) ||
-                           dzn_cmd_buffer_strip_restart_active(cmdbuf, pipeline, indexed);
+                           dzn_cmd_buffer_strip_restart_active(cmdbuf, pipeline, indexed) ||
+                           dzn_cmd_buffer_list_restart_width(cmdbuf, pipeline, indexed);
    draw_type.triangle_fan_primitive_restart = draw_type.triangle_fan && prim_restart;
 
    if (draw_type.draw_params || draw_type.draw_id || draw_type.triangle_fan) {
@@ -4551,6 +4660,88 @@ dzn_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
    }
 }
 
+/* Preserve raw D32 data when a partial MSAA copy would otherwise pass through
+ * SV_Depth (which clamps/canonicalizes special values).  The scratch is an
+ * integer color target; whole native copies avoid shader depth conversion.
+ * This does not establish native subnormal D32 storage (see contract probe). */
+static VkResult
+dzn_cmd_buffer_alloc_raw_d32_scratch(struct dzn_cmd_buffer *cmdbuf,
+                                    const struct dzn_image *original,
+                                    struct dzn_image *scratch)
+{
+   struct dzn_device *device = container_of(cmdbuf->vk.base.device, struct dzn_device, vk);
+   *scratch = *original;
+   scratch->vk.format = VK_FORMAT_R32_UINT;
+   scratch->vk.aspects = VK_IMAGE_ASPECT_COLOR_BIT;
+   scratch->vk.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+   scratch->desc.Format = DXGI_FORMAT_R32_TYPELESS;
+   scratch->desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+   scratch->valid_access = D3D12_BARRIER_ACCESS_COMMON | D3D12_BARRIER_ACCESS_RENDER_TARGET |
+      D3D12_BARRIER_ACCESS_SHADER_RESOURCE | D3D12_BARRIER_ACCESS_COPY_SOURCE | D3D12_BARRIER_ACCESS_COPY_DEST;
+   scratch->castable_formats = NULL;
+   scratch->castable_format_count = 0;
+   D3D12_HEAP_PROPERTIES props = dzn_ID3D12Device4_GetCustomHeapProperties(device->dev, 0, D3D12_HEAP_TYPE_DEFAULT);
+   HRESULT hr = ID3D12Device1_CreateCommittedResource(device->dev, &props,
+      D3D12_HEAP_FLAG_NONE, &scratch->desc, D3D12_RESOURCE_STATE_COMMON, NULL,
+      &IID_ID3D12Resource, (void **)&scratch->res);
+   if (FAILED(hr))
+      return vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   struct dzn_internal_resource *entry = vk_alloc(&cmdbuf->vk.pool->alloc,
+      sizeof(*entry), 8, VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   if (!entry) {
+      ID3D12Resource_Release(scratch->res);
+      return vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
+   entry->res = scratch->res;
+   entry->size = 0;
+   list_addtail(&entry->link, &cmdbuf->internal_bufs[DZN_INTERNAL_BUF_DEFAULT]);
+   return VK_SUCCESS;
+}
+
+static void
+dzn_cmd_buffer_copy_entire_compatible_image(struct dzn_cmd_buffer *cmdbuf,
+   const struct dzn_image *src, VkImageLayout src_layout,
+   const struct dzn_image *dst, VkImageLayout dst_layout)
+{
+   VkImageSubresourceRange src_range = {src->vk.aspects, 0, src->vk.mip_levels, 0, src->vk.array_layers};
+   VkImageSubresourceRange dst_range = {dst->vk.aspects, 0, dst->vk.mip_levels, 0, dst->vk.array_layers};
+   D3D12_BARRIER_LAYOUT src_restore = D3D12_BARRIER_LAYOUT_COMMON, dst_restore = D3D12_BARRIER_LAYOUT_COMMON;
+   if (cmdbuf->enhanced_barriers) {
+      src_restore = dzn_cmd_buffer_require_layout(cmdbuf, src, src_layout, D3D12_BARRIER_LAYOUT_COPY_SOURCE, &src_range);
+      dst_restore = dzn_cmd_buffer_require_layout(cmdbuf, dst, dst_layout, D3D12_BARRIER_LAYOUT_COPY_DEST, &dst_range);
+   } else {
+      dzn_cmd_buffer_queue_image_range_state_transition(cmdbuf, src, &src_range,
+         dzn_image_layout_to_state(src, src_layout, src->vk.aspects, cmdbuf->type),
+         D3D12_RESOURCE_STATE_COPY_SOURCE, DZN_QUEUE_TRANSITION_FLUSH);
+      dzn_cmd_buffer_queue_image_range_state_transition(cmdbuf, dst, &dst_range,
+         dzn_image_layout_to_state(dst, dst_layout, dst->vk.aspects, cmdbuf->type),
+         D3D12_RESOURCE_STATE_COPY_DEST, DZN_QUEUE_TRANSITION_FLUSH);
+   }
+   for (uint32_t layer = 0; layer < src->vk.array_layers; layer++) {
+      for (uint32_t mip = 0; mip < src->vk.mip_levels; mip++) {
+         D3D12_TEXTURE_COPY_LOCATION src_loc = {
+            .pResource = src->res, .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            .SubresourceIndex = mip + layer * src->vk.mip_levels,
+         };
+         D3D12_TEXTURE_COPY_LOCATION dst_loc = src_loc;
+         dst_loc.pResource = dst->res;
+         ID3D12GraphicsCommandList1_CopyTextureRegion(cmdbuf->cmdlist, &dst_loc, 0, 0, 0, &src_loc, NULL);
+      }
+   }
+   if (cmdbuf->enhanced_barriers) {
+      dzn_cmd_buffer_restore_layout(cmdbuf, src, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_SOURCE,
+         D3D12_BARRIER_LAYOUT_COPY_SOURCE, src_restore, &src_range);
+      dzn_cmd_buffer_restore_layout(cmdbuf, dst, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST,
+         D3D12_BARRIER_LAYOUT_COPY_DEST, dst_restore, &dst_range);
+   } else {
+      dzn_cmd_buffer_queue_image_range_state_transition(cmdbuf, src, &src_range, D3D12_RESOURCE_STATE_COPY_SOURCE,
+         dzn_image_layout_to_state(src, src_layout, src->vk.aspects, cmdbuf->type), DZN_QUEUE_TRANSITION_FLUSH);
+      dzn_cmd_buffer_queue_image_range_state_transition(cmdbuf, dst, &dst_range, D3D12_RESOURCE_STATE_COPY_DEST,
+         dzn_image_layout_to_state(dst, dst_layout, dst->vk.aspects, cmdbuf->type), DZN_QUEUE_TRANSITION_FLUSH);
+   }
+}
+
 VKAPI_ATTR void VKAPI_CALL
 dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
                   const VkCopyImageInfo2 *info)
@@ -4569,10 +4760,14 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
       const VkImageCopy2 *region = &info->pRegions[i];
 
       dzn_foreach_aspect(aspect, region->srcSubresource.aspectMask) {
-         assert(aspect & region->dstSubresource.aspectMask);
-
-         if (!dzn_image_formats_are_compatible(device, src->vk.format, dst->vk.format,
-                                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT, aspect) &&
+         VkImageAspectFlagBits dst_aspect = region->dstSubresource.aspectMask & aspect ?
+            aspect : (VkImageAspectFlagBits)region->dstSubresource.aspectMask;
+         bool compatible = dst_aspect == aspect ?
+            dzn_image_formats_are_compatible(device, src->vk.format, dst->vk.format,
+                                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT, aspect) :
+            dzn_get_typeless_dxgi_format(src->desc.Format) ==
+            dzn_get_typeless_dxgi_format(dst->desc.Format);
+         if (!compatible &&
              src->vk.tiling != VK_IMAGE_TILING_LINEAR &&
              dst->vk.tiling != VK_IMAGE_TILING_LINEAR) {
             requires_temp_res = true;
@@ -4598,18 +4793,33 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
    }
 
    if (use_blit) {
-      /* This copy -> blit lowering doesn't work if the vkCmdCopyImage[2]() is
-       * is issued on a transfer queue, but we don't have any better option
-       * right now...
-       */
+      const bool matching_aspect_copy =
+         vk_format_is_depth_or_stencil(src->vk.format) != vk_format_is_depth_or_stencil(dst->vk.format);
+      struct dzn_image scratch, src_scratch;
+      bool raw_d32_dst = matching_aspect_copy && dst->vk.format == VK_FORMAT_D32_SFLOAT;
+      bool raw_d32_src = matching_aspect_copy && src->vk.format == VK_FORMAT_D32_SFLOAT;
+      if (raw_d32_src) {
+         if (dzn_cmd_buffer_alloc_raw_d32_scratch(cmdbuf, src, &src_scratch) != VK_SUCCESS)
+            return;
+         dzn_cmd_buffer_copy_entire_compatible_image(cmdbuf, src, info->srcImageLayout,
+            &src_scratch, VK_IMAGE_LAYOUT_GENERAL);
+      }
+      if (raw_d32_dst) {
+         if (dzn_cmd_buffer_alloc_raw_d32_scratch(cmdbuf, dst, &scratch) != VK_SUCCESS)
+            return;
+         dzn_cmd_buffer_copy_entire_compatible_image(cmdbuf, dst, info->dstImageLayout,
+            &scratch, VK_IMAGE_LAYOUT_GENERAL);
+      }
+      /* Internal raster passes are legal on every native list exposed by
+       * Dozen. Public Vulkan queue/format restrictions still apply. */
       STACK_ARRAY(VkImageBlit2, blit_regions, info->regionCount);
 
       VkBlitImageInfo2 blit_info = {
          .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
-         .srcImage = info->srcImage,
-         .srcImageLayout = info->srcImageLayout,
-         .dstImage = info->dstImage,
-         .dstImageLayout = info->dstImageLayout,
+         .srcImage = raw_d32_src ? dzn_image_to_handle(&src_scratch) : info->srcImage,
+         .srcImageLayout = raw_d32_src ? VK_IMAGE_LAYOUT_GENERAL : info->srcImageLayout,
+         .dstImage = raw_d32_dst ? dzn_image_to_handle(&scratch) : info->dstImage,
+         .dstImageLayout = raw_d32_dst ? VK_IMAGE_LAYOUT_GENERAL : info->dstImageLayout,
          .regionCount = info->regionCount,
          .pRegions = blit_regions,
          .filter = VK_FILTER_NEAREST,
@@ -4636,9 +4846,16 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
          blit_regions[r].dstOffsets[1].x += info->pRegions[r].extent.width;
          blit_regions[r].dstOffsets[1].y += info->pRegions[r].extent.height;
          blit_regions[r].dstOffsets[1].z += info->pRegions[r].extent.depth;
+         if (raw_d32_dst)
+            blit_regions[r].dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+         if (raw_d32_src)
+            blit_regions[r].srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
       }
 
-      dzn_CmdBlitImage2(commandBuffer, &blit_info);
+      dzn_cmd_buffer_blit_image(cmdbuf, &blit_info, matching_aspect_copy);
+      if (raw_d32_dst)
+         dzn_cmd_buffer_copy_entire_compatible_image(cmdbuf, &scratch, VK_IMAGE_LAYOUT_GENERAL,
+            dst, info->dstImageLayout);
 
       STACK_ARRAY_FINISH(blit_regions);
       return;
@@ -4664,7 +4881,7 @@ dzn_CmdCopyImage2(VkCommandBuffer commandBuffer,
       if (vk_format_has_depth(src->vk.format))
          aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
       else if (vk_format_has_stencil(src->vk.format))
-         aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+         aspect = VK_IMAGE_ASPECT_STENCIL_BIT;
       else
          aspect = VK_IMAGE_ASPECT_COLOR_BIT;
 
@@ -4760,14 +4977,15 @@ dzn_alloc_and_bind_blit_heap_slots(struct dzn_cmd_buffer *cmdbuf,
    return VK_SUCCESS;
 }
 
-VKAPI_ATTR void VKAPI_CALL
-dzn_CmdBlitImage2(VkCommandBuffer commandBuffer,
-                  const VkBlitImageInfo2 *info)
+static void
+dzn_cmd_buffer_blit_image(struct dzn_cmd_buffer *cmdbuf,
+                          const VkBlitImageInfo2 *info, bool bit_copy)
 {
-   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
 
    if (info->regionCount == 0)
       return;
+
+   dzn_cmd_buffer_set_conditional(cmdbuf, false);
 
    uint32_t desc_count = 0;
    for (uint32_t r = 0; r < info->regionCount; r++)
@@ -4783,13 +5001,15 @@ dzn_CmdBlitImage2(VkCommandBuffer commandBuffer,
                                                          D3D12_FILTER_MIN_MAG_MIP_POINT,
                                                         &heap, &heap_slot, &sampler_heap, &sampler_heap_slot);
 
-   if (result != VK_SUCCESS)
+   if (result != VK_SUCCESS) {
+      dzn_cmd_buffer_set_conditional(cmdbuf, true);
       return;
+   }
 
    ID3D12GraphicsCommandList1_IASetPrimitiveTopology(cmdbuf->cmdlist, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
    for (uint32_t r = 0; r < info->regionCount; r++)
-      dzn_cmd_buffer_blit_region(cmdbuf, info, heap, &heap_slot, sampler_heap, sampler_heap_slot, r);
+      dzn_cmd_buffer_blit_region(cmdbuf, info, heap, &heap_slot, sampler_heap, sampler_heap_slot, r, bit_copy);
 
    cmdbuf->state.pipeline = NULL;
    cmdbuf->state.dirty |= DZN_CMD_DIRTY_VIEWPORTS | DZN_CMD_DIRTY_SCISSORS;
@@ -4797,6 +5017,81 @@ dzn_CmdBlitImage2(VkCommandBuffer commandBuffer,
       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |=
          DZN_CMD_BINDPOINT_DIRTY_PIPELINE;
    }
+   dzn_cmd_buffer_set_conditional(cmdbuf, true);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+dzn_CmdBlitImage2(VkCommandBuffer commandBuffer, const VkBlitImageInfo2 *info)
+{
+   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
+   dzn_cmd_buffer_blit_image(cmdbuf, info, false);
+}
+
+static void
+dzn_cmd_buffer_clear_msaa_integer(struct dzn_cmd_buffer *cmdbuf,
+   struct dzn_image *image, VkImageLayout layout, const VkClearColorValue *color,
+   uint32_t range_count, const VkImageSubresourceRange *ranges)
+{
+   struct dzn_device *device = container_of(cmdbuf->vk.base.device, struct dzn_device, vk);
+   struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
+   enum pipe_format pfmt = vk_format_to_pipe_format(image->vk.format);
+   struct dzn_meta_blit_key key = {
+      .out_format = dzn_image_get_dxgi_format(pdev, image->vk.format,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT),
+      .samples = image->vk.samples,
+      .loc = FRAG_RESULT_DATA0,
+      .out_type = util_format_is_pure_sint(pfmt) ? GLSL_TYPE_INT : GLSL_TYPE_UINT,
+      .sampler_dim = GLSL_SAMPLER_DIM_MS,
+      .stencil_bit = 0xf,
+      .bit_copy = DZN_BLIT_CLEAR_INTEGER,
+   };
+   const struct dzn_meta_blit *ctx = dzn_meta_blits_get_context(device, &key);
+   if (!ctx) {
+      vk_command_buffer_set_error(&cmdbuf->vk, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      return;
+   }
+   dzn_cmd_buffer_set_conditional(cmdbuf, false);
+   ID3D12GraphicsCommandList1_SetGraphicsRootSignature(cmdbuf->cmdlist, ctx->root_sig);
+   cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].root_sig = ctx->root_sig;
+   ID3D12GraphicsCommandList1_SetPipelineState(cmdbuf->cmdlist, ctx->pipeline_state);
+   ID3D12GraphicsCommandList1_IASetPrimitiveTopology(cmdbuf->cmdlist, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+   ID3D12GraphicsCommandList1_SetGraphicsRoot32BitConstants(cmdbuf->cmdlist,
+      device->support_static_samplers ? 2 : 3, 4, color->uint32, 0);
+   for (uint32_t r = 0; r < range_count; r++) {
+      const VkImageSubresourceRange *range = &ranges[r];
+      D3D12_BARRIER_LAYOUT restore = D3D12_BARRIER_LAYOUT_COMMON;
+      if (cmdbuf->enhanced_barriers)
+         restore = dzn_cmd_buffer_require_layout(cmdbuf, image, layout,
+            D3D12_BARRIER_LAYOUT_RENDER_TARGET, range);
+      else
+         dzn_cmd_buffer_queue_image_range_layout_transition(cmdbuf, image, range,
+            layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, DZN_QUEUE_TRANSITION_FLUSH);
+      for (uint32_t level = 0; level < dzn_get_level_count(image, range); level++) {
+         uint32_t mip = range->baseMipLevel + level;
+         VkOffset3D offsets[2] = {{0, 0, 0},
+            {u_minify(image->vk.extent.width, mip), u_minify(image->vk.extent.height, mip), 1}};
+         VkImageSubresourceLayers subres = {VK_IMAGE_ASPECT_COLOR_BIT, mip, range->baseArrayLayer, 1};
+         dzn_cmd_buffer_blit_set_2d_region(cmdbuf, image, &subres, offsets,
+            image, &subres, offsets, false);
+         uint32_t layers = range->layerCount == VK_REMAINING_ARRAY_LAYERS ?
+            image->vk.array_layers - range->baseArrayLayer : range->layerCount;
+         for (uint32_t layer = 0; layer < layers; layer++) {
+            dzn_cmd_buffer_blit_prepare_dst_view(cmdbuf, image, VK_IMAGE_ASPECT_COLOR_BIT,
+               mip, range->baseArrayLayer + layer, offsets, false);
+            ID3D12GraphicsCommandList1_DrawInstanced(cmdbuf->cmdlist, 4, 1, 0, 0);
+         }
+      }
+      if (cmdbuf->enhanced_barriers)
+         dzn_cmd_buffer_restore_layout(cmdbuf, image, D3D12_BARRIER_SYNC_RENDER_TARGET,
+            D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_LAYOUT_RENDER_TARGET, restore, range);
+      else
+         dzn_cmd_buffer_queue_image_range_layout_transition(cmdbuf, image, range,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, layout, DZN_QUEUE_TRANSITION_FLUSH);
+   }
+   cmdbuf->state.pipeline = NULL;
+   cmdbuf->state.dirty |= DZN_CMD_DIRTY_VIEWPORTS | DZN_CMD_DIRTY_SCISSORS;
+   cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |= DZN_CMD_BINDPOINT_DIRTY_PIPELINE;
+   dzn_cmd_buffer_set_conditional(cmdbuf, true);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -5558,6 +5853,8 @@ dzn_CmdBindPipeline(VkCommandBuffer commandBuffer,
                 gfx->vp.count * sizeof(cmdbuf->state.viewports[0]));
          cmdbuf->state.sysvals.gfx.viewport_width = cmdbuf->state.viewports[0].Width;
          cmdbuf->state.sysvals.gfx.viewport_height = cmdbuf->state.viewports[0].Height;
+         cmdbuf->state.sysvals.gfx.viewport_min_depth = gfx->vp.min_depth;
+         cmdbuf->state.sysvals.gfx.viewport_max_depth = gfx->vp.max_depth;
          cmdbuf->state.dirty |= DZN_CMD_DIRTY_VIEWPORTS;
          cmdbuf->state.bindpoint[pipelineBindPoint].dirty |= DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
       }
@@ -5947,6 +6244,10 @@ dzn_CmdSetViewport(VkCommandBuffer commandBuffer,
 
    cmdbuf->state.sysvals.gfx.viewport_width = cmdbuf->state.viewports[0].Width;
    cmdbuf->state.sysvals.gfx.viewport_height = cmdbuf->state.viewports[0].Height;
+   if (firstViewport == 0 && viewportCount) {
+      cmdbuf->state.sysvals.gfx.viewport_min_depth = pViewports[0].minDepth;
+      cmdbuf->state.sysvals.gfx.viewport_max_depth = pViewports[0].maxDepth;
+   }
 
    if (viewportCount) {
       cmdbuf->state.dirty |= DZN_CMD_DIRTY_VIEWPORTS;
@@ -6065,7 +6366,8 @@ dzn_CmdDrawIndexed(VkCommandBuffer commandBuffer,
       cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].pipeline;
 
    if ((dzn_cmd_buffer_triangle_fan_active(cmdbuf, pipeline) ||
-        dzn_cmd_buffer_strip_restart_active(cmdbuf, pipeline, true)) &&
+        dzn_cmd_buffer_strip_restart_active(cmdbuf, pipeline, true) ||
+        dzn_cmd_buffer_list_restart_width(cmdbuf, pipeline, true)) &&
        dzn_cmd_buffer_restart_active(cmdbuf, pipeline)) {
       /* The indexed+primitive-restart+triangle-fan combination is a mess,
        * since we have to walk the index buffer, skip entries with the
@@ -6771,6 +7073,8 @@ dzn_CmdSetDepthBias(VkCommandBuffer commandBuffer,
    cmdbuf->state.pipeline_variant.depth_bias.clamp = depthBiasClamp;
    cmdbuf->state.pipeline_variant.depth_bias.slope_factor = depthBiasSlopeFactor;
    cmdbuf->state.sysvals.gfx.depth_bias = depthBiasConstantFactor;
+   cmdbuf->state.sysvals.gfx.depth_bias_slope = depthBiasSlopeFactor;
+   cmdbuf->state.sysvals.gfx.depth_bias_clamp = depthBiasClamp;
    cmdbuf->state.bindpoint[VK_PIPELINE_BIND_POINT_GRAPHICS].dirty |= DZN_CMD_BINDPOINT_DIRTY_SYSVALS;
    if (pdev->options16.DynamicDepthBiasSupported)
       cmdbuf->state.dirty |= DZN_CMD_DIRTY_DEPTH_BIAS;
@@ -6908,7 +7212,45 @@ DZN_SET_EXTENDED(DepthBoundsTestEnable, VkBool32, depth_bounds_test)
 DZN_SET_EXTENDED(StencilTestEnable, VkBool32, stencil_test)
 DZN_SET_EXTENDED(RasterizerDiscardEnable, VkBool32, discard)
 DZN_SET_EXTENDED(PrimitiveRestartEnable, VkBool32, restart)
+DZN_SET_EXTENDED(DepthClampEnableEXT, VkBool32, depth_clamp)
+DZN_SET_EXTENDED(DepthClipEnableEXT, VkBool32, depth_clip)
+DZN_SET_EXTENDED(AlphaToCoverageEnableEXT, VkBool32, alpha_to_coverage)
+DZN_SET_EXTENDED(RasterizationSamplesEXT, VkSampleCountFlagBits, samples)
+DZN_SET_EXTENDED(ConservativeRasterizationModeEXT, VkConservativeRasterizationModeEXT, conservative)
 #undef DZN_SET_EXTENDED
+
+#define DZN_SET_EXTENDED_ARRAY(Name, Type, member) \
+VKAPI_ATTR void VKAPI_CALL \
+dzn_CmdSet##Name(VkCommandBuffer commandBuffer, uint32_t firstAttachment, \
+                uint32_t attachmentCount, const Type *values) \
+{ \
+   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer); \
+   vk_common_CmdSet##Name(commandBuffer, firstAttachment, attachmentCount, values); \
+   memcpy(&cmdbuf->state.pipeline_variant.extended.member[firstAttachment], values, attachmentCount * sizeof(Type)); \
+   dzn_cmd_buffer_dirty_extended(cmdbuf); \
+}
+DZN_SET_EXTENDED_ARRAY(ColorBlendEnableEXT, VkBool32, blend_enable)
+DZN_SET_EXTENDED_ARRAY(ColorBlendEquationEXT, VkColorBlendEquationEXT, blend_equation)
+DZN_SET_EXTENDED_ARRAY(ColorWriteMaskEXT, VkColorComponentFlags, color_mask)
+#undef DZN_SET_EXTENDED_ARRAY
+
+VKAPI_ATTR void VKAPI_CALL
+dzn_CmdSetExtraPrimitiveOverestimationSizeEXT(VkCommandBuffer commandBuffer, float size)
+{
+   assert(size == 0.0f);
+   vk_common_CmdSetExtraPrimitiveOverestimationSizeEXT(commandBuffer, size);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+dzn_CmdSetSampleMaskEXT(VkCommandBuffer commandBuffer, VkSampleCountFlagBits samples,
+                       const VkSampleMask *pSampleMask)
+{
+   VK_FROM_HANDLE(dzn_cmd_buffer, cmdbuf, commandBuffer);
+   vk_common_CmdSetSampleMaskEXT(commandBuffer, samples, pSampleMask);
+   /* D3D12 and this device support at most 32 samples. */
+   cmdbuf->state.pipeline_variant.extended.sample_mask = pSampleMask[0];
+   dzn_cmd_buffer_dirty_extended(cmdbuf);
+}
 
 VKAPI_ATTR void VKAPI_CALL
 dzn_CmdSetDepthBiasEnable(VkCommandBuffer commandBuffer, VkBool32 value)

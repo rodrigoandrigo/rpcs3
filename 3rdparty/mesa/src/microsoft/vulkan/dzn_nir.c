@@ -296,6 +296,84 @@ dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type)
 }
 
 nir_shader *
+dzn_nir_list_restart_rewrite_index_shader(uint8_t old_index_size, unsigned width)
+{
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
+      dxil_get_base_nir_compiler_options(), "dzn_list_restart_%u_%u", old_index_size, width);
+   nir_def *params_desc = dzn_nir_create_bo_desc(&b, nir_var_mem_ubo, 0, 0, "params", 0);
+   nir_def *dst = dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 1, "indices", ACCESS_NON_READABLE);
+   nir_def *src = dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 2, "source", ACCESS_NON_WRITEABLE);
+   nir_def *count_dst = dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 3, "count", ACCESS_NON_READABLE);
+   nir_def *params = nir_load_ubo(&b, 2, 32, params_desc, nir_imm_int(&b, 0),
+                                 .align_mul = 4, .range = ~0);
+   nir_variable *cursor = nir_local_variable_create(b.impl, glsl_uint_type(), "cursor");
+   nir_variable *pending = nir_local_variable_create(b.impl, glsl_uint_type(), "pending");
+   nir_variable *written = nir_local_variable_create(b.impl, glsl_uint_type(), "written");
+   nir_variable *primitive = nir_local_variable_create(b.impl,
+      glsl_array_type(glsl_uint_type(), width, 0), "primitive");
+   nir_store_var(&b, cursor, nir_channel(&b, params, 0), 1);
+   nir_store_var(&b, pending, nir_imm_int(&b, 0), 1);
+   nir_store_var(&b, written, nir_imm_int(&b, 0), 1);
+   nir_push_loop(&b);
+   nir_def *i = nir_load_var(&b, cursor);
+   nir_break_if(&b, nir_uge(&b, i, nir_channel(&b, params, 1)));
+   nir_def *offset = nir_imul_imm(&b, i, old_index_size);
+   nir_def *value = nir_load_ssbo(&b, 1, 32, src, nir_iand_imm(&b, offset, ~3u), .align_mul = 4);
+   if (old_index_size == 2)
+      value = nir_iand_imm(&b, nir_ushr(&b, value,
+         nir_imul_imm(&b, nir_iand_imm(&b, offset, 2), 8)), 0xffff);
+   nir_store_var(&b, cursor, nir_iadd_imm(&b, i, 1), 1);
+   nir_push_if(&b, nir_ieq_imm(&b, value, old_index_size == 2 ? 0xffff : 0xffffffff));
+   /* Restart discards an incomplete list primitive, not just the marker. */
+   nir_store_var(&b, pending, nir_imm_int(&b, 0), 1);
+   nir_push_else(&b, NULL);
+   nir_def *n = nir_load_var(&b, pending);
+   nir_store_deref(&b, nir_build_deref_array(&b, nir_build_deref_var(&b, primitive), n), value, 1);
+   n = nir_iadd_imm(&b, n, 1);
+   nir_store_var(&b, pending, n, 1);
+   nir_push_if(&b, nir_ieq_imm(&b, n, width));
+   nir_def *base = nir_load_var(&b, written);
+   for (unsigned v = 0; v < width; v++) {
+      nir_def *index = nir_load_deref(&b, nir_build_deref_array_imm(&b,
+         nir_build_deref_var(&b, primitive), v));
+      nir_store_ssbo(&b, index, dst, nir_imul_imm(&b, nir_iadd_imm(&b, base, v), 4),
+         .write_mask = 1, .access = ACCESS_NON_READABLE, .align_mul = 4);
+   }
+   nir_store_var(&b, written, nir_iadd_imm(&b, base, width), 1);
+   nir_store_var(&b, pending, nir_imm_int(&b, 0), 1);
+   nir_pop_if(&b, NULL);
+   nir_pop_if(&b, NULL);
+   nir_pop_loop(&b, NULL);
+   nir_store_ssbo(&b, nir_load_var(&b, written), count_dst, nir_imm_int(&b, 0),
+      .write_mask = 1, .access = ACCESS_NON_READABLE, .align_mul = 4);
+   return b.shader;
+}
+
+static bool
+dzn_lower_patch_vertices(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_load_patch_vertices_in)
+      return false;
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def_replace(&intr->def, nir_imm_int(b, *(unsigned *)data));
+   return true;
+}
+
+bool
+dzn_nir_lower_patch_vertices(nir_shader *nir, unsigned count)
+{
+   if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
+      nir_foreach_shader_in_variable(var, nir) {
+         if (!var->data.patch && glsl_type_is_array(var->type))
+            var->type = glsl_array_type(glsl_get_array_element(var->type), count, 0);
+      }
+      nir_fixup_deref_types(nir);
+   }
+   return nir_shader_intrinsics_pass(nir, dzn_lower_patch_vertices,
+      nir_metadata_control_flow, &count);
+}
+
+nir_shader *
 dzn_nir_triangle_fan_prim_restart_rewrite_index_shader(uint8_t old_index_size, bool strip)
 {
    assert(old_index_size == 2 || old_index_size == 4);
@@ -632,9 +710,26 @@ dzn_nir_blit_vs(void)
 nir_shader *
 dzn_nir_blit_fs(const struct dzn_nir_blit_info *info)
 {
+   if (info->bit_copy == DZN_BLIT_CLEAR_INTEGER) {
+      nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT,
+         dxil_get_base_nir_compiler_options(), "dzn_meta_clear_integer_fs()");
+      nir_variable *out = nir_variable_create(b.shader, nir_var_shader_out,
+         glsl_vector_type(info->out_type, 4), "clear");
+      out->data.location = FRAG_RESULT_DATA0;
+      nir_def *desc = dzn_nir_create_bo_desc(&b, nir_var_mem_ubo, 0, 0, "clear", 0);
+      nir_def *value = nir_load_ubo(&b, 4, 32, desc, nir_imm_int(&b, 0),
+         .align_mul = 16, .range_base = 0, .range = 16);
+      nir_store_var(&b, out, value, 0xf);
+      return b.shader;
+   }
    bool ms = info->src_samples > 1;
+   enum glsl_base_type in_type = info->out_type;
+   if (info->bit_copy)
+      in_type = info->bit_copy == DZN_BLIT_COPY_D32_FLOAT_TO_COLOR ||
+                info->bit_copy == DZN_BLIT_COPY_D16_TO_COLOR ||
+                info->bit_copy == DZN_BLIT_COPY_D24_TO_COLOR ? GLSL_TYPE_FLOAT : GLSL_TYPE_UINT;
    nir_alu_type nir_out_type =
-      nir_get_nir_type_for_glsl_base_type(info->out_type);
+      nir_get_nir_type_for_glsl_base_type(in_type);
    uint32_t coord_comps =
       glsl_get_sampler_dim_coordinate_components(info->sampler_dim) +
       info->src_is_array;
@@ -645,7 +740,7 @@ dzn_nir_blit_fs(const struct dzn_nir_blit_info *info)
                                      "dzn_meta_blit_fs()");
 
    const struct glsl_type *tex_type =
-      glsl_texture_type(info->sampler_dim, info->src_is_array, info->out_type);
+      glsl_texture_type(info->sampler_dim, info->src_is_array, in_type);
    nir_variable *tex_var =
       nir_variable_create(b.shader, nir_var_uniform, tex_type, "texture");
    nir_deref_instr *tex_deref = nir_build_deref_var(&b, tex_var);
@@ -791,6 +886,25 @@ dzn_nir_blit_fs(const struct dzn_nir_blit_info *info)
       res = &tex->def;
    }
 
+   /* Image copies preserve bits, unlike numerical image blits.  Normalized
+    * depth planes are unpacked by the SRV and repacked to their exact integer
+    * representation; color planes use unsigned views regardless of VkFormat.
+    * D32 has no arithmetic conversion: NIR/DXIL reinterprets the stored bits. */
+   switch (info->bit_copy) {
+   case DZN_BLIT_COPY_D16_TO_COLOR:
+   case DZN_BLIT_COPY_D24_TO_COLOR:
+      res = nir_f2u32(&b, nir_fround_even(&b, nir_fmul_imm(&b, res,
+         info->bit_copy == DZN_BLIT_COPY_D16_TO_COLOR ? 65535.0f : 16777215.0f)));
+      break;
+   case DZN_BLIT_COPY_COLOR_TO_D16:
+   case DZN_BLIT_COPY_COLOR_TO_D24: {
+      uint32_t mask = info->bit_copy == DZN_BLIT_COPY_COLOR_TO_D16 ? 65535 : 16777215;
+      res = nir_fdiv(&b, nir_u2f32(&b, nir_iand_imm(&b, res, mask)), nir_imm_float(&b, mask));
+      break;
+   }
+   default:
+      break;
+   }
    if (info->stencil_fallback) {
       nir_def *mask_desc =
          dzn_nir_create_bo_desc(&b, nir_var_mem_ubo, 0, 0, "mask", 0);
@@ -1162,6 +1276,8 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
    front_facing_var->data.interpolation = INTERP_MODE_FLAT;
 
    nir_def *depth_bias_scale = NULL;
+   nir_def *polygon_bias = NULL;
+   nir_def *depth_range = NULL;
    nir_def *provoking_index = load_point_runtime_data(b, info,
       offsetof(struct dxil_spirv_vertex_runtime_data, provoking_vertex_index));
    nir_def *provoking_strip = load_point_runtime_data(b, info,
@@ -1170,6 +1286,20 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
       nir_ine_imm(b, nir_iand_imm(b, nir_load_primitive_id(b), 1), 0)),
       nir_imm_int(b, 1), provoking_index);
    if (info->depth_bias) {
+      nir_def *depth_min = load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, viewport_min_depth));
+      depth_range = nir_fsub(b, load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, viewport_max_depth)), depth_min);
+      nir_def *ndc[3], *window_z[3];
+      for (unsigned v = 0; v < 3; v++) {
+         nir_def *p = nir_load_deref(b, nir_build_deref_array_imm(b,
+            nir_build_deref_var(b, pos_var), v));
+         ndc[v] = nir_fdiv(b, nir_trim_vector(b, p, 3), nir_channel(b, p, 3));
+         nir_def *z = nir_channel(b, ndc[v], 2);
+         if (info->negative_one_to_one)
+            z = nir_fmul_imm(b, nir_fadd_imm(b, z, 1.0f), 0.5f);
+         window_z[v] = nir_fadd(b, nir_fmul(b, z, depth_range), depth_min);
+      }
       switch (info->ds_fmt) {
       case DXGI_FORMAT_D16_UNORM:
          depth_bias_scale = nir_imm_float(b, 1.0f / (1 << 16));
@@ -1179,11 +1309,9 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
          break;
       case DXGI_FORMAT_D32_FLOAT:
       case DXGI_FORMAT_D32_FLOAT_S8X24_UINT: {
-         nir_deref_instr *deref_pos = nir_build_deref_var(b, pos_var);
          nir_def *max_z = NULL;
          for (uint32_t i = 0; i < 3; ++i) {
-            nir_def *pos = nir_load_deref(b, nir_build_deref_array_imm(b, deref_pos, i));
-            nir_def *z = nir_iand_imm(b, nir_channel(b, pos, 2), 0x7fffffff);
+            nir_def *z = nir_iand_imm(b, window_z[i], 0x7fffffff);
             max_z = i == 0 ? z : nir_imax(b, z, max_z);
          }
          nir_def *exponent = nir_ishr_imm(b, nir_iand_imm(b, max_z, 0x7f800000), 23);
@@ -1193,6 +1321,32 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
       default:
          depth_bias_scale = nir_imm_float(b, 0.0f);
       }
+      nir_def *e1 = nir_fsub(b, ndc[1], ndc[0]);
+      nir_def *e2 = nir_fsub(b, ndc[2], ndc[0]);
+      nir_def *x1 = nir_channel(b, e1, 0), *y1 = nir_channel(b, e1, 1);
+      nir_def *x2 = nir_channel(b, e2, 0), *y2 = nir_channel(b, e2, 1);
+      nir_def *z1 = nir_fsub(b, window_z[1], window_z[0]);
+      nir_def *z2 = nir_fsub(b, window_z[2], window_z[0]);
+      nir_def *det = nir_fsub(b, nir_fmul(b, x1, y2), nir_fmul(b, x2, y1));
+      nir_def *dx = nir_fdiv(b, nir_fsub(b, nir_fmul(b, z1, y2), nir_fmul(b, z2, y1)), det);
+      nir_def *dy = nir_fdiv(b, nir_fsub(b, nir_fmul(b, x1, z2), nir_fmul(b, x2, z1)), det);
+      dx = nir_fabs(b, nir_fdiv(b, nir_fmul_imm(b, dx, 2), load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, viewport_width))));
+      dy = nir_fabs(b, nir_fdiv(b, nir_fmul_imm(b, dy, 2), load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, viewport_height))));
+      nir_def *slope = nir_bcsel(b, nir_fneu_imm(b, det, 0), nir_fmax(b, dx, dy), nir_imm_float(b, 0));
+      nir_def *constant = info->depth_bias_dynamic ? load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, depth_bias)) : nir_imm_float(b, info->constant_depth_bias);
+      nir_def *factor = info->depth_bias_dynamic ? load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, depth_bias_slope)) : nir_imm_float(b, info->slope_scaled_depth_bias);
+      nir_def *clamp = info->depth_bias_dynamic ? load_point_runtime_data(b, info,
+         offsetof(struct dxil_spirv_vertex_runtime_data, depth_bias_clamp)) : nir_imm_float(b, info->depth_bias_clamp);
+      polygon_bias = nir_fadd(b, nir_fmul(b, factor, slope), nir_fmul(b, constant, depth_bias_scale));
+      polygon_bias = nir_bcsel(b, nir_fgt_imm(b, clamp, 0), nir_fmin(b, polygon_bias, clamp),
+         nir_bcsel(b, nir_flt_imm(b, clamp, 0), nir_fmax(b, polygon_bias, clamp), polygon_bias));
+      /* Convert window-space bias back to clip space, including reversed depth. */
+      polygon_bias = nir_bcsel(b, nir_fneu_imm(b, depth_range, 0),
+         nir_fdiv(b, polygon_bias, depth_range), nir_imm_float(b, 0));
    }
 
    /* Temporary variable "loop_index" to loop over input vertices */
@@ -1252,21 +1406,14 @@ dzn_nir_polygon_point_mode_gs(const nir_shader *previous_shader, struct dzn_nir_
                        !out[i]->data.is_xfb_only ? provoking_index : loop_index;
       nir_deref_instr *in_value = nir_build_deref_array(b, nir_build_deref_var(b, in[i]), index);
       if (in[i] == pos_var && info->depth_bias) {
-         nir_def *bias_val;
-         if (info->depth_bias_dynamic) {
-            bias_val = load_point_runtime_data(b, info,
-               offsetof(struct dxil_spirv_vertex_runtime_data, depth_bias));
-         } else {
-            assert(info->slope_scaled_depth_bias == 0.0f);
-            bias_val = nir_imm_float(b, info->constant_depth_bias);
-         }
-         bias_val = nir_fmul(b, bias_val, depth_bias_scale);
+         nir_def *bias_val = polygon_bias;
          if (info->depth_bias_enable_dynamic) {
             nir_def *enabled = nir_ine_imm(b, load_point_runtime_data(b, info,
                offsetof(struct dxil_spirv_vertex_runtime_data, point_depth_bias_enable)), 0);
             bias_val = nir_bcsel(b, enabled, bias_val, nir_imm_float(b, 0.0f));
          }
          nir_def *old_val = nir_load_deref(b, in_value);
+         bias_val = nir_fmul(b, bias_val, nir_channel(b, old_val, 3));
          nir_def *new_val = nir_vector_insert_imm(b, old_val,
                                                       nir_fadd(b, nir_channel(b, old_val, 2), bias_val),
                                                       2);

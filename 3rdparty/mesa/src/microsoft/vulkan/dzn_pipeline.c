@@ -905,10 +905,14 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       info->pInputAssemblyState->topology != VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
    if (pipeline->use_gs_for_provoking_vertex)
       last_raster_stage = MESA_SHADER_GEOMETRY;
-   const uint32_t provoking_compile_key = 0x50560001u ^
+   const uint32_t provoking_compile_key = 0x50560002u ^
       ((uint32_t)pipeline->provoking_vertex_last << 24) ^
       ((uint32_t)device->vk.enabled_features.provokingVertexLast << 25) ^
       ((uint32_t)info->pInputAssemblyState->topology << 16);
+   const VkPipelineTessellationDomainOriginStateCreateInfo *domain_info = info->pTessellationState ?
+      vk_find_struct_const(info->pTessellationState->pNext, PIPELINE_TESSELLATION_DOMAIN_ORIGIN_STATE_CREATE_INFO) : NULL;
+   const VkTessellationDomainOrigin domain_origin = domain_info ? domain_info->domainOrigin :
+      VK_TESSELLATION_DOMAIN_ORIGIN_UPPER_LEFT;
 
    enum dxil_spirv_yz_flip_mode yz_flip_mode = DXIL_SPIRV_YZ_FLIP_NONE;
    uint16_t y_flip_mask = 0, z_flip_mask = 0;
@@ -957,6 +961,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       _mesa_blake3_update(&pipeline_hash_ctx, &lower_view_index, sizeof(lower_view_index));
       _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
       _mesa_blake3_update(&pipeline_hash_ctx, &provoking_compile_key, sizeof(provoking_compile_key));
+      _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->patch_control_points, sizeof(pipeline->patch_control_points));
+      _mesa_blake3_update(&pipeline_hash_ctx, &domain_origin, sizeof(domain_origin));
 
       u_foreach_bit(stage, active_stage_mask) {
          const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_size_info =
@@ -1044,20 +1050,38 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
          pipeline->needs_draw_sysvals = metadata.needs_draw_sysvals;
    }
 
+   nir_shader *domain_shader = pipeline->templates.shaders[MESA_SHADER_TESS_EVAL].nir;
+   if (domain_shader && domain_origin == VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT)
+      domain_shader->info.tess.ccw = !domain_shader->info.tess.ccw;
    if (pipeline->use_gs_for_polygon_mode_point || pipeline->use_gs_for_provoking_vertex) {
-      nir_shader *previous = pipeline->templates.shaders[MESA_SHADER_VERTEX].nir;
+      nir_shader *tcs = pipeline->templates.shaders[MESA_SHADER_TESS_CTRL].nir;
+      if (tcs)
+         NIR_PASS(_, tcs, dzn_nir_lower_patch_vertices, pipeline->patch_control_points);
+      nir_shader *tes = pipeline->templates.shaders[MESA_SHADER_TESS_EVAL].nir;
+      nir_shader *previous = tes ? tes : pipeline->templates.shaders[MESA_SHADER_VERTEX].nir;
+      pipeline->ia.raster_topology = tes ?
+         tes->info.tess.point_mode ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST :
+         tes->info.tess._primitive_mode == TESS_PRIMITIVE_ISOLINES ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST :
+         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST : pipeline->ia.vk_topology;
+      /* Polygon mode only applies to polygons.  TES point mode and isolines
+       * must not be fed to a geometry shader expecting three vertices. */
+      const bool expand_polygon_points = pipeline->use_gs_for_polygon_mode_point &&
+         pipeline->ia.raster_topology != VK_PRIMITIVE_TOPOLOGY_POINT_LIST &&
+         to_prim_topology_type(pipeline->ia.raster_topology) != D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
       nir_shader *fragment = pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir;
       if (fragment)
          dxil_nir_propagate_interp_to_outputs(previous, fragment);
-      /* TODO: Cache; handle TES */
+      /* Geometry expansion consumes the final pre-raster stage, including TES. */
       struct dzn_nir_point_gs_info gs_info = {
          .cull_mode = info->pRasterizationState->cullMode,
          .front_ccw = info->pRasterizationState->frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE,
-         .depth_bias = info->pRasterizationState->depthBiasEnable,
+         .depth_bias = info->pRasterizationState->depthBiasEnable ||
+                       (pipeline->extended_dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE),
          .depth_bias_dynamic = pipeline->zsa.dynamic_depth_bias,
          .cull_dynamic = pipeline->extended_dynamic & DZN_DYNAMIC_CULL,
          .front_face_dynamic = pipeline->extended_dynamic & DZN_DYNAMIC_FRONT_FACE,
          .depth_bias_enable_dynamic = pipeline->extended_dynamic & DZN_DYNAMIC_DEPTH_BIAS_ENABLE,
+         .negative_one_to_one = depth_clip_negative_one_to_one,
          .ds_fmt = pipeline->zsa.ds_fmt,
          .constant_depth_bias = info->pRasterizationState->depthBiasConstantFactor,
          .slope_scaled_depth_bias = info->pRasterizationState->depthBiasSlopeFactor,
@@ -1068,10 +1092,11 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
          }
       };
       pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir =
-         pipeline->use_gs_for_polygon_mode_point ?
+         expand_polygon_points ?
          dzn_nir_polygon_point_mode_gs(previous, &gs_info) :
          dzn_nir_provoking_vertex_gs(previous,
-            to_prim_topology_type(info->pInputAssemblyState->topology) == D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE ?
+            pipeline->ia.raster_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ? MESA_PRIM_POINTS :
+            to_prim_topology_type(pipeline->ia.raster_topology) == D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE ?
                MESA_PRIM_LINES : MESA_PRIM_TRIANGLES,
             DZN_REGISTER_SPACE_SYSVALS,
             fragment && (fragment->info.inputs_read & VARYING_BIT_PRIMITIVE_ID));
@@ -1099,7 +1124,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       active_stage_mask |= (1 << MESA_SHADER_GEOMETRY);
       memcpy(stages[MESA_SHADER_GEOMETRY].spirv_hash, stages[MESA_SHADER_VERTEX].spirv_hash, BLAKE3_KEY_LEN);
 
-      if (pipeline->use_gs_for_polygon_mode_point &&
+      if (expand_polygon_points &&
           (active_stage_mask & (1 << MESA_SHADER_FRAGMENT)) &&
           BITSET_TEST(pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir->info.system_values_read, SYSTEM_VALUE_FRONT_FACE))
          NIR_PASS(_, pipeline->templates.shaders[MESA_SHADER_FRAGMENT].nir, dxil_nir_forward_front_face);
@@ -1109,6 +1134,12 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
     * so we can eliminate outputs that are never read by the next stage.
     */
    uint32_t link_mask = active_stage_mask;
+   nir_shader *tcs_nir = pipeline->templates.shaders[MESA_SHADER_TESS_CTRL].nir;
+   nir_shader *tes_nir = pipeline->templates.shaders[MESA_SHADER_TESS_EVAL].nir;
+   if (tcs_nir)
+      NIR_PASS(_, tcs_nir, dzn_nir_lower_patch_vertices, pipeline->patch_control_points);
+   if (tes_nir && tcs_nir)
+      NIR_PASS(_, tes_nir, dzn_nir_lower_patch_vertices, tcs_nir->info.tess.tcs_vertices_out);
    while (link_mask != 0) {
       mesa_shader_stage stage = util_last_bit(link_mask) - 1;
       link_mask &= ~BITFIELD_BIT(stage);
@@ -1150,6 +1181,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
 
          _mesa_blake3_init(&dxil_hash_ctx);
          _mesa_blake3_update(&dxil_hash_ctx, &provoking_compile_key, sizeof(provoking_compile_key));
+         _mesa_blake3_update(&dxil_hash_ctx, &pipeline->patch_control_points, sizeof(pipeline->patch_control_points));
+         _mesa_blake3_update(&dxil_hash_ctx, &domain_origin, sizeof(domain_origin));
          _mesa_blake3_update(&dxil_hash_ctx, stages[stage].nir_hash, sizeof(stages[stage].nir_hash));
          _mesa_blake3_update(&dxil_hash_ctx, stages[stage].spirv_hash, sizeof(stages[stage].spirv_hash));
          _mesa_blake3_update(&dxil_hash_ctx, stages[stage].link_hashes[0], sizeof(stages[stage].link_hashes[0]));
@@ -1496,6 +1529,7 @@ dzn_graphics_pipeline_translate_ia(struct dzn_device *device,
    const bool native_fan = pdev->options15.TriangleFanSupported &&
                            !device->vk.enabled_features.provokingVertexLast;
    pipeline->ia.triangle_fan = in_ia->topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN && !native_fan;
+   pipeline->ia.vk_topology = in_ia->topology;
    pipeline->ia.topology =
       to_prim_topology(in_ia->topology, in_tes ? in_tes->patchControlPoints : 0,
                        native_fan);
@@ -1575,6 +1609,11 @@ dzn_graphics_pipeline_translate_rast(struct dzn_device *device,
                            PIPELINE_RASTERIZATION_DEPTH_CLIP_STATE_CREATE_INFO_EXT);
    const bool depth_clip_enable = depth_clip_info ? depth_clip_info->depthClipEnable :
                                                     !in_rast->depthClampEnable;
+   if (in->pViewportState && in->pViewportState->pViewports && in->pViewportState->viewportCount) {
+      pipeline->vp.min_depth = in->pViewportState->pViewports[0].minDepth;
+      pipeline->vp.max_depth = in->pViewportState->pViewports[0].maxDepth;
+   }
+   pipeline->explicit_depth_clip = depth_clip_info != NULL;
    const VkPipelineRasterizationConservativeStateCreateInfoEXT *conservative =
       vk_find_struct_const(in_rast->pNext,
                            PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT);
@@ -1583,10 +1622,16 @@ dzn_graphics_pipeline_translate_rast(struct dzn_device *device,
                       VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT ?
       D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON :
       D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+   const VkPipelineRasterizationLineStateCreateInfoEXT *line =
+      vk_find_struct_const(in_rast->pNext,
+                           PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT);
+   const VkLineRasterizationModeEXT line_mode = line ?
+      line->lineRasterizationMode : VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT;
    const VkPipelineViewportStateCreateInfo *in_vp =
       in_rast->rasterizerDiscardEnable ? NULL : in->pViewportState;
    const VkPipelineMultisampleStateCreateInfo *in_ms =
-      in_rast->rasterizerDiscardEnable ? NULL : in->pMultisampleState;
+      in_rast->rasterizerDiscardEnable && !(pipeline->extended_dynamic & DZN_DYNAMIC_DISCARD) ?
+      NULL : in->pMultisampleState;
 
    if (in_vp) {
       pipeline->vp.count = in_vp->viewportCount;
@@ -1617,7 +1662,24 @@ dzn_graphics_pipeline_translate_rast(struct dzn_device *device,
          desc->SlopeScaledDepthBias = in_rast->depthBiasSlopeFactor;
          desc->DepthBiasClamp = in_rast->depthBiasClamp;
       }
-      desc->LineRasterizationMode = D3D12_LINE_RASTERIZATION_MODE_QUADRILATERAL_NARROW;
+      switch (line_mode) {
+      case VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT:
+         desc->LineRasterizationMode = in_ms && in_ms->rasterizationSamples > 1 ?
+            D3D12_LINE_RASTERIZATION_MODE_QUADRILATERAL_NARROW :
+            D3D12_LINE_RASTERIZATION_MODE_ALIASED;
+         break;
+      case VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT:
+         desc->LineRasterizationMode = D3D12_LINE_RASTERIZATION_MODE_QUADRILATERAL_NARROW;
+         break;
+      case VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT:
+         desc->LineRasterizationMode = D3D12_LINE_RASTERIZATION_MODE_ALIASED;
+         break;
+      case VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT:
+         desc->LineRasterizationMode = D3D12_LINE_RASTERIZATION_MODE_ALPHA_ANTIALIASED;
+         break;
+      default:
+         UNREACHABLE("Unsupported line rasterization mode");
+      }
       desc->ConservativeRaster = conservative_mode;
    } else {
       static_assert(sizeof(D3D12_RASTERIZER_DESC) == sizeof(D3D12_RASTERIZER_DESC1), "Casting between these");
@@ -1663,21 +1725,26 @@ dzn_graphics_pipeline_translate_ms(struct dzn_graphics_pipeline *pipeline,
    const VkPipelineRasterizationStateCreateInfo *in_rast =
       in->pRasterizationState;
    const VkPipelineMultisampleStateCreateInfo *in_ms =
-      in_rast->rasterizerDiscardEnable ? NULL : in->pMultisampleState;
+      in_rast->rasterizerDiscardEnable && !(pipeline->extended_dynamic & DZN_DYNAMIC_DISCARD) ?
+      NULL : in->pMultisampleState;
 
    if (!in_ms)
       return;
 
    /* TODO: minSampleShading (use VRS), alphaToOneEnable */
    d3d12_gfx_pipeline_state_stream_new_desc(out, SAMPLE_DESC, DXGI_SAMPLE_DESC, desc);
-   desc->Count = in_ms ? in_ms->rasterizationSamples : 1;
+   pipeline->templates.desc_offsets.samples =
+      (uintptr_t)desc - (uintptr_t)out->pPipelineStateSubobjectStream;
+   desc->Count = pipeline->extended_dynamic & DZN_DYNAMIC_SAMPLES ? 1 : in_ms->rasterizationSamples;
    desc->Quality = 0;
 
-   if (!in_ms->pSampleMask)
+   if (!in_ms->pSampleMask && !(pipeline->extended_dynamic & DZN_DYNAMIC_SAMPLE_MASK))
       return;
 
    d3d12_gfx_pipeline_state_stream_new_desc(out, SAMPLE_MASK, UINT, mask);
-   *mask = *in_ms->pSampleMask;
+   pipeline->templates.desc_offsets.sample_mask =
+      (uintptr_t)mask - (uintptr_t)out->pPipelineStateSubobjectStream;
+   *mask = in_ms->pSampleMask ? *in_ms->pSampleMask : UINT32_MAX;
 }
 
 static D3D12_STENCIL_OP
@@ -1954,11 +2021,13 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
    const VkPipelineRasterizationStateCreateInfo *in_rast =
       in->pRasterizationState;
    const VkPipelineColorBlendStateCreateInfo *in_blend =
-      in_rast->rasterizerDiscardEnable ? NULL : in->pColorBlendState;
+      in_rast->rasterizerDiscardEnable && !(pipeline->extended_dynamic & DZN_DYNAMIC_DISCARD) ?
+      NULL : in->pColorBlendState;
    const VkPipelineColorWriteCreateInfoEXT *color_write_info = in_blend ?
       vk_find_struct_const(in_blend->pNext, PIPELINE_COLOR_WRITE_CREATE_INFO_EXT) : NULL;
    const VkPipelineMultisampleStateCreateInfo *in_ms =
-      in_rast->rasterizerDiscardEnable ? NULL : in->pMultisampleState;
+      in_rast->rasterizerDiscardEnable && !(pipeline->extended_dynamic & DZN_DYNAMIC_DISCARD) ?
+      NULL : in->pMultisampleState;
 
    if (!in_blend || !in_ms)
       return;
@@ -1976,7 +2045,8 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
    desc->AlphaToCoverageEnable = in_ms->alphaToCoverageEnable;
    pipeline->templates.desc_offsets.blend =
       (uintptr_t)desc - (uintptr_t)out->pPipelineStateSubobjectStream;
-   if (pipeline->blend.dynamic_color_write_enable || color_write_info)
+   if (pipeline->blend.dynamic_color_write_enable || color_write_info ||
+       (pipeline->extended_dynamic & (DZN_DYNAMIC_BLEND_ENABLE | DZN_DYNAMIC_BLEND_EQUATION | DZN_DYNAMIC_COLOR_MASK)))
       desc->IndependentBlendEnable = true;
    if (color_write_info && !pipeline->blend.dynamic_color_write_enable)
       assert(color_write_info->attachmentCount == in_blend->attachmentCount);
@@ -1984,15 +2054,38 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
           sizeof(pipeline->blend.constants));
 
    for (uint32_t i = 0; i < in_blend->attachmentCount; i++) {
-      if (i > 0 &&
+      VkPipelineColorBlendAttachmentState attachment = {
+         .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+         .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
+         .colorBlendOp = VK_BLEND_OP_ADD,
+         .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+         .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+         .alphaBlendOp = VK_BLEND_OP_ADD,
+         .colorWriteMask = 15,
+      };
+      if (in_blend->pAttachments) {
+         if (!(pipeline->extended_dynamic & DZN_DYNAMIC_BLEND_ENABLE))
+            attachment.blendEnable = in_blend->pAttachments[i].blendEnable;
+         if (!(pipeline->extended_dynamic & DZN_DYNAMIC_COLOR_MASK))
+            attachment.colorWriteMask = in_blend->pAttachments[i].colorWriteMask;
+         if (!(pipeline->extended_dynamic & DZN_DYNAMIC_BLEND_EQUATION)) {
+            attachment.srcColorBlendFactor = in_blend->pAttachments[i].srcColorBlendFactor;
+            attachment.dstColorBlendFactor = in_blend->pAttachments[i].dstColorBlendFactor;
+            attachment.colorBlendOp = in_blend->pAttachments[i].colorBlendOp;
+            attachment.srcAlphaBlendFactor = in_blend->pAttachments[i].srcAlphaBlendFactor;
+            attachment.dstAlphaBlendFactor = in_blend->pAttachments[i].dstAlphaBlendFactor;
+            attachment.alphaBlendOp = in_blend->pAttachments[i].alphaBlendOp;
+         }
+      }
+      if (i > 0 && in_blend->pAttachments &&
           memcmp(&in_blend->pAttachments[i - 1], &in_blend->pAttachments[i],
                  sizeof(*in_blend->pAttachments)) != 0)
          desc->IndependentBlendEnable = true;
 
       desc->RenderTarget[i].BlendEnable =
-         in_blend->pAttachments[i].blendEnable;
+         attachment.blendEnable;
       desc->RenderTarget[i].RenderTargetWriteMask =
-         in_blend->pAttachments[i].colorWriteMask;
+         attachment.colorWriteMask;
       if (!pipeline->blend.dynamic_color_write_enable && color_write_info &&
           !color_write_info->pColorWriteEnables[i])
          desc->RenderTarget[i].RenderTargetWriteMask = 0;
@@ -2002,17 +2095,17 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
          desc->RenderTarget[i].LogicOp = logicop;
       } else {
          desc->RenderTarget[i].SrcBlend =
-            translate_blend_factor(in_blend->pAttachments[i].srcColorBlendFactor, false, support_alpha_blend_factor);
+            translate_blend_factor(attachment.srcColorBlendFactor, false, support_alpha_blend_factor);
          desc->RenderTarget[i].DestBlend =
-            translate_blend_factor(in_blend->pAttachments[i].dstColorBlendFactor, false, support_alpha_blend_factor);
+            translate_blend_factor(attachment.dstColorBlendFactor, false, support_alpha_blend_factor);
          desc->RenderTarget[i].BlendOp =
-            translate_blend_op(in_blend->pAttachments[i].colorBlendOp);
+            translate_blend_op(attachment.colorBlendOp);
          desc->RenderTarget[i].SrcBlendAlpha =
-            translate_blend_factor(in_blend->pAttachments[i].srcAlphaBlendFactor, true, support_alpha_blend_factor);
+            translate_blend_factor(attachment.srcAlphaBlendFactor, true, support_alpha_blend_factor);
          desc->RenderTarget[i].DestBlendAlpha =
-            translate_blend_factor(in_blend->pAttachments[i].dstAlphaBlendFactor, true, support_alpha_blend_factor);
+            translate_blend_factor(attachment.dstAlphaBlendFactor, true, support_alpha_blend_factor);
          desc->RenderTarget[i].BlendOpAlpha =
-            translate_blend_op(in_blend->pAttachments[i].alphaBlendOp);
+            translate_blend_op(attachment.alphaBlendOp);
       }
    }
 }
@@ -2240,6 +2333,36 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
             break;
          case VK_DYNAMIC_STATE_VERTEX_INPUT_EXT:
             pipeline->extended_dynamic |= DZN_DYNAMIC_VERTEX_INPUT;
+            break;
+         case VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_DEPTH_CLAMP;
+            break;
+         case VK_DYNAMIC_STATE_DEPTH_CLIP_ENABLE_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_DEPTH_CLIP;
+            break;
+         case VK_DYNAMIC_STATE_SAMPLE_MASK_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_SAMPLE_MASK;
+            break;
+         case VK_DYNAMIC_STATE_ALPHA_TO_COVERAGE_ENABLE_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_ALPHA_TO_COVERAGE;
+            break;
+         case VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_BLEND_ENABLE;
+            break;
+         case VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_BLEND_EQUATION;
+            break;
+         case VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_COLOR_MASK;
+            break;
+         case VK_DYNAMIC_STATE_RASTERIZATION_SAMPLES_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_SAMPLES;
+            break;
+         case VK_DYNAMIC_STATE_CONSERVATIVE_RASTERIZATION_MODE_EXT:
+            pipeline->extended_dynamic |= DZN_DYNAMIC_CONSERVATIVE;
+            break;
+         case VK_DYNAMIC_STATE_EXTRA_PRIMITIVE_OVERESTIMATION_SIZE_EXT:
+            /* Only 0.0 is supported by our conservative rasterization properties. */
             break;
          case VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE:
             pipeline->extended_dynamic |= DZN_DYNAMIC_VERTEX_STRIDE;
@@ -2696,7 +2819,19 @@ dzn_mask_extended_state(const struct dzn_graphics_pipeline *pipeline,
    MASK_STATE(DZN_DYNAMIC_DISCARD, discard);
    MASK_STATE(DZN_DYNAMIC_DEPTH_BIAS_ENABLE, depth_bias_enable);
    MASK_STATE(DZN_DYNAMIC_RESTART, restart);
+   MASK_STATE(DZN_DYNAMIC_DEPTH_CLAMP, depth_clamp);
+   MASK_STATE(DZN_DYNAMIC_DEPTH_CLIP, depth_clip);
+   MASK_STATE(DZN_DYNAMIC_SAMPLE_MASK, sample_mask);
+   MASK_STATE(DZN_DYNAMIC_ALPHA_TO_COVERAGE, alpha_to_coverage);
+   MASK_STATE(DZN_DYNAMIC_SAMPLES, samples);
+   MASK_STATE(DZN_DYNAMIC_CONSERVATIVE, conservative);
 #undef MASK_STATE
+   if (dyn & DZN_DYNAMIC_BLEND_ENABLE)
+      memcpy(out->blend_enable, in->blend_enable, sizeof(out->blend_enable));
+   if (dyn & DZN_DYNAMIC_BLEND_EQUATION)
+      memcpy(out->blend_equation, in->blend_equation, sizeof(out->blend_equation));
+   if (dyn & DZN_DYNAMIC_COLOR_MASK)
+      memcpy(out->color_mask, in->color_mask, sizeof(out->color_mask));
    if (dyn & DZN_DYNAMIC_STENCIL_OP)
       memcpy(out->stencil, in->stencil, sizeof(out->stencil));
    if (dyn & DZN_DYNAMIC_VERTEX_INPUT) {
@@ -2778,6 +2913,17 @@ dzn_graphics_pipeline_get_state_locked(struct dzn_graphics_pipeline *pipeline,
       masked_key.ib_strip_cut = key->ib_strip_cut;
    if ((pipeline->extended_dynamic & DZN_DYNAMIC_RESTART) && !key->extended.restart)
       masked_key.ib_strip_cut = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
+   VkPrimitiveTopology effective_topology = pipeline->extended_dynamic & DZN_DYNAMIC_TOPOLOGY ?
+      key->extended.topology : pipeline->ia.vk_topology;
+   if ((pipeline->base.device->vk.enabled_features.primitiveTopologyListRestart ||
+        pipeline->base.device->vk.enabled_features.primitiveTopologyPatchListRestart) &&
+       (effective_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
+        effective_topology == VK_PRIMITIVE_TOPOLOGY_LINE_LIST ||
+        effective_topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
+        effective_topology == VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY ||
+        effective_topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY ||
+        effective_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST))
+      masked_key.ib_strip_cut = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
 
    if (!pdev->options16.DynamicDepthBiasSupported &&
        dzn_graphics_pipeline_get_desc_template(pipeline, rast) &&
@@ -2835,6 +2981,13 @@ dzn_graphics_pipeline_get_state_locked(struct dzn_graphics_pipeline *pipeline,
       /* All three D3D12 rasterizer descriptors share these enum/BOOL offsets.
        * DepthBias is FLOAT in RASTERIZER1/2, but zero has identical bits. */
       if (rast) {
+         if (dyn & DZN_DYNAMIC_CONSERVATIVE)
+            rast->ConservativeRaster = extended->conservative == VK_CONSERVATIVE_RASTERIZATION_MODE_OVERESTIMATE_EXT ?
+               D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON : D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+         if (dyn & DZN_DYNAMIC_DEPTH_CLIP)
+            rast->DepthClipEnable = extended->depth_clip;
+         else if ((dyn & DZN_DYNAMIC_DEPTH_CLAMP) && !pipeline->explicit_depth_clip)
+            rast->DepthClipEnable = !extended->depth_clamp;
          if (dyn & DZN_DYNAMIC_CULL)
             rast->CullMode = translate_cull_mode(extended->cull_mode);
          if (dyn & DZN_DYNAMIC_FRONT_FACE)
@@ -2848,6 +3001,21 @@ dzn_graphics_pipeline_get_state_locked(struct dzn_graphics_pipeline *pipeline,
          D3D12_PRIMITIVE_TOPOLOGY_TYPE *topology =
             dzn_graphics_pipeline_get_desc(pipeline, stream_buf, topology);
          *topology = to_prim_topology_type(extended->topology);
+      }
+      if (dyn & DZN_DYNAMIC_SAMPLE_MASK) {
+         UINT *mask = dzn_graphics_pipeline_get_desc(pipeline, stream_buf, sample_mask);
+         if (mask)
+            *mask = extended->sample_mask;
+      }
+      if (dyn & DZN_DYNAMIC_SAMPLES) {
+         DXGI_SAMPLE_DESC *samples = dzn_graphics_pipeline_get_desc(pipeline, stream_buf, samples);
+         if (samples)
+            samples->Count = extended->samples;
+      }
+      if (dyn & DZN_DYNAMIC_ALPHA_TO_COVERAGE) {
+         D3D12_BLEND_DESC *blend = dzn_graphics_pipeline_get_desc(pipeline, stream_buf, blend);
+         if (blend)
+            blend->AlphaToCoverageEnable = extended->alpha_to_coverage;
       }
       if (((dyn & DZN_DYNAMIC_DISCARD) && extended->discard) ||
           ((dyn & DZN_DYNAMIC_CULL) && extended->cull_mode == VK_CULL_MODE_FRONT_AND_BACK)) {
@@ -2935,6 +3103,23 @@ dzn_graphics_pipeline_get_state_locked(struct dzn_graphics_pipeline *pipeline,
 
       D3D12_BLEND_DESC *blend =
          dzn_graphics_pipeline_get_desc(pipeline, stream_buf, blend);
+      if (blend) {
+         for (uint32_t i = 0; i < MAX_RTS; i++) {
+            if (dyn & DZN_DYNAMIC_BLEND_ENABLE)
+               blend->RenderTarget[i].BlendEnable = extended->blend_enable[i];
+            if (dyn & DZN_DYNAMIC_COLOR_MASK)
+               blend->RenderTarget[i].RenderTargetWriteMask = extended->color_mask[i];
+            if (dyn & DZN_DYNAMIC_BLEND_EQUATION) {
+               const VkColorBlendEquationEXT *eq = &extended->blend_equation[i];
+               blend->RenderTarget[i].SrcBlend = translate_blend_factor(eq->srcColorBlendFactor, false, pdev->options13.AlphaBlendFactorSupported);
+               blend->RenderTarget[i].DestBlend = translate_blend_factor(eq->dstColorBlendFactor, false, pdev->options13.AlphaBlendFactorSupported);
+               blend->RenderTarget[i].BlendOp = translate_blend_op(eq->colorBlendOp);
+               blend->RenderTarget[i].SrcBlendAlpha = translate_blend_factor(eq->srcAlphaBlendFactor, true, pdev->options13.AlphaBlendFactorSupported);
+               blend->RenderTarget[i].DestBlendAlpha = translate_blend_factor(eq->dstAlphaBlendFactor, true, pdev->options13.AlphaBlendFactorSupported);
+               blend->RenderTarget[i].BlendOpAlpha = translate_blend_op(eq->alphaBlendOp);
+            }
+         }
+      }
       if (blend && pipeline->blend.dynamic_color_write_enable) {
          for (uint32_t i = 0; i < MAX_RTS; i++) {
             if (!(masked_key.color_write_enables & BITFIELD_BIT(i)))

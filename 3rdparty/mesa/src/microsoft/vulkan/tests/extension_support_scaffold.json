@@ -9,29 +9,29 @@
   },
   "counts": {
     "reviewed_candidates": 177,
-    "implemented_in_review": 52,
-    "pending_scaffolded": 125,
+    "implemented_in_review": 58,
+    "pending_scaffolded": 119,
     "pending_advertised_in_source": 0,
     "without_registry_entry": 0,
     "by_decision_category": {
       "feature_and_zero_one_semantics_unimplemented": 1,
-      "feature_not_reported": 59,
-      "missing_backend_commands": 47,
+      "feature_not_reported": 57,
+      "missing_backend_commands": 43,
       "unhandled_type_or_semantics": 17,
       "unsupported_stub_and_feature_false": 1
     },
     "by_group_tag": {
-      "comandos": 48,
-      "dependencias": 116,
-      "features": 97,
+      "comandos": 44,
+      "dependencias": 110,
+      "features": 91,
       "plataforma-ou-wsi": 14,
-      "promovida-ou-substituida": 19,
+      "promovida-ou-substituida": 16,
       "shader-propriedade-ou-metadados": 8
     }
   },
   "inputs": {
     "backlog": "src/microsoft/vulkan/tests/extension_support_backlog.json",
-    "backlog_sha256": "246a865599caf116b0b5012d5e8857ec982f207ef4f34b8a2f67ada1d35b37b8",
+    "backlog_sha256": "175e82e04ececa6679710b92bbe8687b7e9fd34e0d797fa8dd1f4f6eb5391970",
     "registry": "src/vulkan/registry/vk.xml",
     "dozen_source": "src/microsoft/vulkan/dzn_device.c"
   },
@@ -1521,93 +1521,6 @@
       ]
     },
     {
-      "field": "EXT_device_fault",
-      "name": "VK_EXT_device_fault",
-      "review_status": "rejected_not_advertised",
-      "currently_advertised_in_dozen_source": false,
-      "decision_category": "missing_backend_commands",
-      "group_tags": [
-        "comandos",
-        "features",
-        "promovida-ou-substituida",
-        "dependencias"
-      ],
-      "reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: deviceFault; no complete Dozen backend handler for: vkGetDeviceFaultInfoEXT; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkDeviceFaultAddressInfoEXT, VkDeviceFaultAddressTypeEXT, VkDeviceFaultCountsEXT, VkDeviceFaultInfoEXT, VkDeviceFaultVendorBinaryHeaderVersionEXT, VkDeviceFaultVendorBinaryHeaderVersionOneEXT, VkDeviceFaultVendorInfoEXT, VkPhysicalDeviceFaultFeaturesEXT.",
-      "registry": {
-        "registry_entry": true,
-        "depends": "VK_KHR_get_physical_device_properties2,VK_VERSION_1_1",
-        "requires": null,
-        "platform": null,
-        "promotedto": "VK_KHR_device_fault",
-        "deprecatedby": null,
-        "required_commands": [
-          "vkGetDeviceFaultInfoEXT"
-        ],
-        "command_aliases": {},
-        "required_types": [
-          "VkDeviceFaultAddressInfoEXT",
-          "VkDeviceFaultAddressTypeEXT",
-          "VkDeviceFaultCountsEXT",
-          "VkDeviceFaultInfoEXT",
-          "VkDeviceFaultVendorBinaryHeaderVersionEXT",
-          "VkDeviceFaultVendorBinaryHeaderVersionOneEXT",
-          "VkDeviceFaultVendorInfoEXT",
-          "VkPhysicalDeviceFaultFeaturesEXT"
-        ],
-        "pnext_structures": [
-          "VkPhysicalDeviceFaultFeaturesEXT"
-        ],
-        "feature_structures": [
-          "VkPhysicalDeviceFaultFeaturesEXT"
-        ],
-        "feature_members": [
-          "deviceFault"
-        ],
-        "feature_payload_types": [
-          "VkPhysicalDeviceFaultFeaturesEXT"
-        ],
-        "property_payload_types": []
-      },
-      "work_items": [
-        {
-          "id": "backend_capability_probe",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada bit reportado é respaldado por consulta D3D12 por adaptador ou caminho de software explicitamente compatível com a spec."
-        },
-        {
-          "id": "dependency_and_advertisement_gate",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Anunciar somente quando todas as dependências, regras de versão da API e condições de runtime forem satisfeitas."
-        },
-        {
-          "id": "feature_queries_and_device_enablement",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Consultas de feature retornam valores verdadeiros e a criação do device rejeita bits solicitados sem suporte."
-        },
-        {
-          "id": "pnext_and_object_semantics",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada estrutura de entrada/saída é consumida, validada e testada no caminho de API correspondente."
-        },
-        {
-          "id": "commands_and_dispatch",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada comando requerido tem implementação Dozen ou implementação comum/alias comprovada com semântica de execução correta."
-        },
-        {
-          "id": "static_and_runtime_tests",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Testes de regressão focados passam; runtime Windows/D3D12 e Vulkan CTS aplicável passam antes de reivindicar conformidade."
-        }
-      ]
-    },
-    {
       "field": "EXT_device_generated_commands",
       "name": "VK_EXT_device_generated_commands",
       "review_status": "rejected_not_advertised",
@@ -1870,133 +1783,6 @@
           "status": "todo",
           "required": true,
           "exit_criterion": "Anunciar somente quando todas as dependências, regras de versão da API e condições de runtime forem satisfeitas."
-        },
-        {
-          "id": "pnext_and_object_semantics",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada estrutura de entrada/saída é consumida, validada e testada no caminho de API correspondente."
-        },
-        {
-          "id": "commands_and_dispatch",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada comando requerido tem implementação Dozen ou implementação comum/alias comprovada com semântica de execução correta."
-        },
-        {
-          "id": "static_and_runtime_tests",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Testes de regressão focados passam; runtime Windows/D3D12 e Vulkan CTS aplicável passam antes de reivindicar conformidade."
-        }
-      ]
-    },
-    {
-      "field": "EXT_extended_dynamic_state3",
-      "name": "VK_EXT_extended_dynamic_state3",
-      "review_status": "rejected_not_advertised",
-      "currently_advertised_in_dozen_source": false,
-      "decision_category": "missing_backend_commands",
-      "group_tags": [
-        "comandos",
-        "features",
-        "dependencias"
-      ],
-      "reason": "Rejeitada/não anunciada: feature bits explicitly false: alphaToOne, logicOp, tessellationShader; feature bits have no explicit Dozen assignment: geometryStreams; no complete Dozen backend handler for: vkCmdSetAlphaToCoverageEnableEXT (common helper only), vkCmdSetAlphaToOneEnableEXT (common helper only), vkCmdSetColorBlendAdvancedEXT (common helper only), vkCmdSetColorBlendEnableEXT (common helper only), vkCmdSetColorBlendEquationEXT (common helper only), vkCmdSetColorWriteMaskEXT (common helper only), vkCmdSetConservativeRasterizationModeEXT (common helper only), vkCmdSetCoverageModulationModeNV (common helper only), vkCmdSetCoverageModulationTableEnableNV (common helper only), vkCmdSetCoverageModulationTableNV (common helper only), vkCmdSetCoverageReductionModeNV (common helper only), vkCmdSetCoverageToColorEnableNV (common helper only), vkCmdSetCoverageToColorLocationNV (common helper only), vkCmdSetDepthClampEnableEXT (common helper only), vkCmdSetDepthClipEnableEXT (common helper only), vkCmdSetDepthClipNegativeOneToOneEXT (common helper only), vkCmdSetExtraPrimitiveOverestimationSizeEXT (common helper only), vkCmdSetLineRasterizationModeEXT (common helper only), vkCmdSetLineStippleEnableEXT (common helper only), vkCmdSetLogicOpEnableEXT (common helper only), vkCmdSetPolygonModeEXT (common helper only), vkCmdSetProvokingVertexModeEXT (common helper only), vkCmdSetRasterizationSamplesEXT (common helper only), vkCmdSetRasterizationStreamEXT (common helper only), vkCmdSetRepresentativeFragmentTestEnableNV (common helper only), vkCmdSetSampleLocationsEnableEXT (common helper only), vkCmdSetSampleMaskEXT (common helper only), vkCmdSetShadingRateImageEnableNV (common helper only), vkCmdSetTessellationDomainOriginEXT (common helper only), vkCmdSetViewportSwizzleNV (common helper only), vkCmdSetViewportWScalingEnableNV (common helper only).",
-      "registry": {
-        "registry_entry": true,
-        "depends": "VK_KHR_get_physical_device_properties2,VK_VERSION_1_1",
-        "requires": null,
-        "platform": null,
-        "promotedto": null,
-        "deprecatedby": null,
-        "required_commands": [
-          "vkCmdSetAlphaToCoverageEnableEXT",
-          "vkCmdSetAlphaToOneEnableEXT",
-          "vkCmdSetColorBlendAdvancedEXT",
-          "vkCmdSetColorBlendEnableEXT",
-          "vkCmdSetColorBlendEquationEXT",
-          "vkCmdSetColorWriteMaskEXT",
-          "vkCmdSetConservativeRasterizationModeEXT",
-          "vkCmdSetCoverageModulationModeNV",
-          "vkCmdSetCoverageModulationTableEnableNV",
-          "vkCmdSetCoverageModulationTableNV",
-          "vkCmdSetCoverageReductionModeNV",
-          "vkCmdSetCoverageToColorEnableNV",
-          "vkCmdSetCoverageToColorLocationNV",
-          "vkCmdSetDepthClampEnableEXT",
-          "vkCmdSetDepthClipEnableEXT",
-          "vkCmdSetDepthClipNegativeOneToOneEXT",
-          "vkCmdSetExtraPrimitiveOverestimationSizeEXT",
-          "vkCmdSetLineRasterizationModeEXT",
-          "vkCmdSetLineStippleEnableEXT",
-          "vkCmdSetLogicOpEnableEXT",
-          "vkCmdSetPolygonModeEXT",
-          "vkCmdSetProvokingVertexModeEXT",
-          "vkCmdSetRasterizationSamplesEXT",
-          "vkCmdSetRasterizationStreamEXT",
-          "vkCmdSetRepresentativeFragmentTestEnableNV",
-          "vkCmdSetSampleLocationsEnableEXT",
-          "vkCmdSetSampleMaskEXT",
-          "vkCmdSetShadingRateImageEnableNV",
-          "vkCmdSetTessellationDomainOriginEXT",
-          "vkCmdSetViewportSwizzleNV",
-          "vkCmdSetViewportWScalingEnableNV"
-        ],
-        "command_aliases": {},
-        "required_types": [
-          "VkColorBlendAdvancedEXT",
-          "VkColorBlendEquationEXT",
-          "VkPhysicalDeviceExtendedDynamicState3FeaturesEXT",
-          "VkPhysicalDeviceExtendedDynamicState3PropertiesEXT"
-        ],
-        "pnext_structures": [
-          "VkPhysicalDeviceExtendedDynamicState3FeaturesEXT",
-          "VkPhysicalDeviceExtendedDynamicState3PropertiesEXT"
-        ],
-        "feature_structures": [
-          "VkPhysicalDeviceFeatures",
-          "VkPhysicalDeviceTransformFeedbackFeaturesEXT"
-        ],
-        "feature_members": [
-          "alphaToOne",
-          "depthClamp",
-          "fillModeNonSolid",
-          "geometryStreams",
-          "logicOp",
-          "tessellationShader"
-        ],
-        "feature_payload_types": [
-          "VkPhysicalDeviceExtendedDynamicState3FeaturesEXT"
-        ],
-        "property_payload_types": [
-          "VkPhysicalDeviceExtendedDynamicState3PropertiesEXT"
-        ]
-      },
-      "work_items": [
-        {
-          "id": "backend_capability_probe",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada bit reportado é respaldado por consulta D3D12 por adaptador ou caminho de software explicitamente compatível com a spec."
-        },
-        {
-          "id": "dependency_and_advertisement_gate",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Anunciar somente quando todas as dependências, regras de versão da API e condições de runtime forem satisfeitas."
-        },
-        {
-          "id": "feature_queries_and_device_enablement",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Consultas de feature retornam valores verdadeiros e a criação do device rejeita bits solicitados sem suporte."
-        },
-        {
-          "id": "property_queries",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada propriedade requerida vem de consulta D3D12 válida ou limite Vulkan documentado."
         },
         {
           "id": "pnext_and_object_semantics",
@@ -2315,76 +2101,6 @@
           "status": "todo",
           "required": true,
           "exit_criterion": "Cada comando requerido tem implementação Dozen ou implementação comum/alias comprovada com semântica de execução correta."
-        },
-        {
-          "id": "static_and_runtime_tests",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Testes de regressão focados passam; runtime Windows/D3D12 e Vulkan CTS aplicável passam antes de reivindicar conformidade."
-        }
-      ]
-    },
-    {
-      "field": "EXT_image_2d_view_of_3d",
-      "name": "VK_EXT_image_2d_view_of_3d",
-      "review_status": "rejected_not_advertised",
-      "currently_advertised_in_dozen_source": false,
-      "decision_category": "feature_not_reported",
-      "group_tags": [
-        "features",
-        "dependencias"
-      ],
-      "reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: image2DViewOf3D; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDeviceImage2DViewOf3DFeaturesEXT.",
-      "registry": {
-        "registry_entry": true,
-        "depends": "(VK_KHR_maintenance1+VK_KHR_get_physical_device_properties2),VK_VERSION_1_1",
-        "requires": null,
-        "platform": null,
-        "promotedto": null,
-        "deprecatedby": null,
-        "required_commands": [],
-        "command_aliases": {},
-        "required_types": [
-          "VkPhysicalDeviceImage2DViewOf3DFeaturesEXT"
-        ],
-        "pnext_structures": [
-          "VkPhysicalDeviceImage2DViewOf3DFeaturesEXT"
-        ],
-        "feature_structures": [
-          "VkPhysicalDeviceImage2DViewOf3DFeaturesEXT"
-        ],
-        "feature_members": [
-          "image2DViewOf3D"
-        ],
-        "feature_payload_types": [
-          "VkPhysicalDeviceImage2DViewOf3DFeaturesEXT"
-        ],
-        "property_payload_types": []
-      },
-      "work_items": [
-        {
-          "id": "backend_capability_probe",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada bit reportado é respaldado por consulta D3D12 por adaptador ou caminho de software explicitamente compatível com a spec."
-        },
-        {
-          "id": "dependency_and_advertisement_gate",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Anunciar somente quando todas as dependências, regras de versão da API e condições de runtime forem satisfeitas."
-        },
-        {
-          "id": "feature_queries_and_device_enablement",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Consultas de feature retornam valores verdadeiros e a criação do device rejeita bits solicitados sem suporte."
-        },
-        {
-          "id": "pnext_and_object_semantics",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada estrutura de entrada/saída é consumida, validada e testada no caminho de API correspondente."
         },
         {
           "id": "static_and_runtime_tests",
@@ -2781,91 +2497,6 @@
           "status": "todo",
           "required": true,
           "exit_criterion": "Cada estrutura de entrada/saída é consumida, validada e testada no caminho de API correspondente."
-        },
-        {
-          "id": "static_and_runtime_tests",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Testes de regressão focados passam; runtime Windows/D3D12 e Vulkan CTS aplicável passam antes de reivindicar conformidade."
-        }
-      ]
-    },
-    {
-      "field": "EXT_line_rasterization",
-      "name": "VK_EXT_line_rasterization",
-      "review_status": "rejected_not_advertised",
-      "currently_advertised_in_dozen_source": false,
-      "decision_category": "missing_backend_commands",
-      "group_tags": [
-        "comandos",
-        "features",
-        "promovida-ou-substituida",
-        "dependencias"
-      ],
-      "reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: rectangularLines, bresenhamLines, smoothLines, stippledRectangularLines, stippledBresenhamLines, stippledSmoothLines; no complete Dozen backend handler for: vkCmdSetLineStippleEXT; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkLineRasterizationModeEXT, VkPhysicalDeviceLineRasterizationFeaturesEXT, VkPhysicalDeviceLineRasterizationPropertiesEXT, VkPipelineRasterizationLineStateCreateInfoEXT.",
-      "registry": {
-        "registry_entry": true,
-        "depends": "VK_KHR_get_physical_device_properties2,VK_VERSION_1_1",
-        "requires": null,
-        "platform": null,
-        "promotedto": "VK_KHR_line_rasterization",
-        "deprecatedby": null,
-        "required_commands": [
-          "vkCmdSetLineStippleEXT"
-        ],
-        "command_aliases": {
-          "vkCmdSetLineStippleEXT": "vkCmdSetLineStipple"
-        },
-        "required_types": [
-          "VkLineRasterizationModeEXT",
-          "VkPhysicalDeviceLineRasterizationFeaturesEXT",
-          "VkPhysicalDeviceLineRasterizationPropertiesEXT",
-          "VkPipelineRasterizationLineStateCreateInfoEXT"
-        ],
-        "pnext_structures": [],
-        "feature_structures": [
-          "VkPhysicalDeviceLineRasterizationFeaturesEXT"
-        ],
-        "feature_members": [
-          "rectangularLines,bresenhamLines,smoothLines,stippledRectangularLines,stippledBresenhamLines,stippledSmoothLines"
-        ],
-        "feature_payload_types": [
-          "VkPhysicalDeviceLineRasterizationFeaturesEXT"
-        ],
-        "property_payload_types": [
-          "VkPhysicalDeviceLineRasterizationPropertiesEXT"
-        ]
-      },
-      "work_items": [
-        {
-          "id": "backend_capability_probe",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada bit reportado é respaldado por consulta D3D12 por adaptador ou caminho de software explicitamente compatível com a spec."
-        },
-        {
-          "id": "dependency_and_advertisement_gate",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Anunciar somente quando todas as dependências, regras de versão da API e condições de runtime forem satisfeitas."
-        },
-        {
-          "id": "feature_queries_and_device_enablement",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Consultas de feature retornam valores verdadeiros e a criação do device rejeita bits solicitados sem suporte."
-        },
-        {
-          "id": "property_queries",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada propriedade requerida vem de consulta D3D12 válida ou limite Vulkan documentado."
-        },
-        {
-          "id": "commands_and_dispatch",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada comando requerido tem implementação Dozen ou implementação comum/alias comprovada com semântica de execução correta."
         },
         {
           "id": "static_and_runtime_tests",
@@ -3773,76 +3404,6 @@
           "status": "todo",
           "required": true,
           "exit_criterion": "Cada comando requerido tem implementação Dozen ou implementação comum/alias comprovada com semântica de execução correta."
-        },
-        {
-          "id": "static_and_runtime_tests",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Testes de regressão focados passam; runtime Windows/D3D12 e Vulkan CTS aplicável passam antes de reivindicar conformidade."
-        }
-      ]
-    },
-    {
-      "field": "EXT_primitive_topology_list_restart",
-      "name": "VK_EXT_primitive_topology_list_restart",
-      "review_status": "rejected_not_advertised",
-      "currently_advertised_in_dozen_source": false,
-      "decision_category": "feature_not_reported",
-      "group_tags": [
-        "features",
-        "dependencias"
-      ],
-      "reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: primitiveTopologyListRestart; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT.",
-      "registry": {
-        "registry_entry": true,
-        "depends": "VK_KHR_get_physical_device_properties2,VK_VERSION_1_1",
-        "requires": null,
-        "platform": null,
-        "promotedto": null,
-        "deprecatedby": null,
-        "required_commands": [],
-        "command_aliases": {},
-        "required_types": [
-          "VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT"
-        ],
-        "pnext_structures": [
-          "VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT"
-        ],
-        "feature_structures": [
-          "VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT"
-        ],
-        "feature_members": [
-          "primitiveTopologyListRestart"
-        ],
-        "feature_payload_types": [
-          "VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT"
-        ],
-        "property_payload_types": []
-      },
-      "work_items": [
-        {
-          "id": "backend_capability_probe",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada bit reportado é respaldado por consulta D3D12 por adaptador ou caminho de software explicitamente compatível com a spec."
-        },
-        {
-          "id": "dependency_and_advertisement_gate",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Anunciar somente quando todas as dependências, regras de versão da API e condições de runtime forem satisfeitas."
-        },
-        {
-          "id": "feature_queries_and_device_enablement",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Consultas de feature retornam valores verdadeiros e a criação do device rejeita bits solicitados sem suporte."
-        },
-        {
-          "id": "pnext_and_object_semantics",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada estrutura de entrada/saída é consumida, validada e testada no caminho de API correspondente."
         },
         {
           "id": "static_and_runtime_tests",
@@ -6071,91 +5632,6 @@
           "status": "todo",
           "required": true,
           "exit_criterion": "Cada estrutura de entrada/saída é consumida, validada e testada no caminho de API correspondente."
-        },
-        {
-          "id": "commands_and_dispatch",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada comando requerido tem implementação Dozen ou implementação comum/alias comprovada com semântica de execução correta."
-        },
-        {
-          "id": "static_and_runtime_tests",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Testes de regressão focados passam; runtime Windows/D3D12 e Vulkan CTS aplicável passam antes de reivindicar conformidade."
-        }
-      ]
-    },
-    {
-      "field": "KHR_line_rasterization",
-      "name": "VK_KHR_line_rasterization",
-      "review_status": "rejected_not_advertised",
-      "currently_advertised_in_dozen_source": false,
-      "decision_category": "missing_backend_commands",
-      "group_tags": [
-        "comandos",
-        "features",
-        "promovida-ou-substituida",
-        "dependencias"
-      ],
-      "reason": "Rejeitada/não anunciada: feature bits have no explicit Dozen assignment: rectangularLines, bresenhamLines, smoothLines, stippledRectangularLines, stippledBresenhamLines, stippledSmoothLines; no complete Dozen backend handler for: vkCmdSetLineStippleKHR; required Vulkan payload type(s) have no Dozen-specific consumer/reference: VkLineRasterizationModeKHR, VkPhysicalDeviceLineRasterizationFeaturesKHR, VkPhysicalDeviceLineRasterizationPropertiesKHR, VkPipelineRasterizationLineStateCreateInfoKHR.",
-      "registry": {
-        "registry_entry": true,
-        "depends": "VK_KHR_get_physical_device_properties2,VK_VERSION_1_1",
-        "requires": null,
-        "platform": null,
-        "promotedto": "VK_VERSION_1_4",
-        "deprecatedby": null,
-        "required_commands": [
-          "vkCmdSetLineStippleKHR"
-        ],
-        "command_aliases": {
-          "vkCmdSetLineStippleKHR": "vkCmdSetLineStipple"
-        },
-        "required_types": [
-          "VkLineRasterizationModeKHR",
-          "VkPhysicalDeviceLineRasterizationFeaturesKHR",
-          "VkPhysicalDeviceLineRasterizationPropertiesKHR",
-          "VkPipelineRasterizationLineStateCreateInfoKHR"
-        ],
-        "pnext_structures": [],
-        "feature_structures": [
-          "VkPhysicalDeviceLineRasterizationFeaturesKHR"
-        ],
-        "feature_members": [
-          "rectangularLines,bresenhamLines,smoothLines,stippledRectangularLines,stippledBresenhamLines,stippledSmoothLines"
-        ],
-        "feature_payload_types": [
-          "VkPhysicalDeviceLineRasterizationFeaturesKHR"
-        ],
-        "property_payload_types": [
-          "VkPhysicalDeviceLineRasterizationPropertiesKHR"
-        ]
-      },
-      "work_items": [
-        {
-          "id": "backend_capability_probe",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada bit reportado é respaldado por consulta D3D12 por adaptador ou caminho de software explicitamente compatível com a spec."
-        },
-        {
-          "id": "dependency_and_advertisement_gate",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Anunciar somente quando todas as dependências, regras de versão da API e condições de runtime forem satisfeitas."
-        },
-        {
-          "id": "feature_queries_and_device_enablement",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Consultas de feature retornam valores verdadeiros e a criação do device rejeita bits solicitados sem suporte."
-        },
-        {
-          "id": "property_queries",
-          "status": "todo",
-          "required": true,
-          "exit_criterion": "Cada propriedade requerida vem de consulta D3D12 válida ou limite Vulkan documentado."
         },
         {
           "id": "commands_and_dispatch",
