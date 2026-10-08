@@ -85,6 +85,11 @@ struct dzn_meta_indirect_draw {
    ID3D12PipelineState *pipeline_state;
 };
 
+struct dzn_meta_large_point_draw_args {
+   ID3D12RootSignature *root_sig;
+   ID3D12PipelineState *pipeline_state;
+};
+
 enum dzn_index_type {
    DZN_NO_INDEX,
    DZN_INDEX_2B,
@@ -314,6 +319,7 @@ struct dzn_device {
    ID3D12DeviceConfiguration *dev_config;
 
    struct dzn_meta_indirect_draw indirect_draws[DZN_NUM_INDIRECT_DRAW_TYPES];
+   struct dzn_meta_large_point_draw_args large_point_draw_args;
    struct dzn_meta_triangle_fan_rewrite_index triangle_fan[DZN_NUM_INDEX_TYPE];
    struct dzn_meta_blits blits;
 

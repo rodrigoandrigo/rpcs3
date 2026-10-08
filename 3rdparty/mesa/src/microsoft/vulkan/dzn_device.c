@@ -278,6 +278,7 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       /* Int8 ALU is widened in NIR, independently of native 16-bit hardware. */
       .KHR_shader_float16_int8               = true,
       .KHR_workgroup_memory_explicit_layout  = true,
+      .KHR_shader_clock                      = true,
       .EXT_conditional_rendering             = true,
       /* Stream output is experimental until position/point-GS capture is exact. */
       .EXT_provoking_vertex                 = true,
@@ -356,6 +357,11 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .EXT_image_sliced_view_of_3d           = true,
       /* Storage-only 2D views are represented by a single-slice D3D12 3D UAV. */
       .EXT_image_2d_view_of_3d               = true,
+      /* Float32 SSBO/shared atomics lower to integer CAS loops in NIR. */
+      .EXT_shader_atomic_float               = true,
+      .EXT_shader_atomic_float2              = true,
+      /* Pixel interlock lowers writable UAVs to DXIL rasterizer-ordered views. */
+      .EXT_fragment_shader_interlock          = pdev->options.ROVsSupported,
       /* Direct-bound render targets have no separate load/store operation. */
       .EXT_load_store_op_none                 = true,
       /* KHR is the promoted spelling of the same load/store operations. */
@@ -1071,6 +1077,35 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
       .workgroupMemoryExplicitLayoutScalarBlockLayout = true,
       .workgroupMemoryExplicitLayout8BitAccess = true,
       .workgroupMemoryExplicitLayout16BitAccess = true,
+      .shaderSubgroupClock                  = true,
+      .shaderDeviceClock                    = false,
+      .shaderBufferFloat32Atomics           = true,
+      .shaderBufferFloat32AtomicAdd         = true,
+      .shaderBufferFloat64Atomics           = false,
+      .shaderBufferFloat64AtomicAdd         = false,
+      .shaderSharedFloat32Atomics           = true,
+      .shaderSharedFloat32AtomicAdd         = true,
+      .shaderSharedFloat64Atomics           = false,
+      .shaderSharedFloat64AtomicAdd         = false,
+      .shaderImageFloat32Atomics            = false,
+      .shaderImageFloat32AtomicAdd          = false,
+      .shaderBufferFloat16Atomics           = false,
+      .shaderBufferFloat16AtomicAdd         = false,
+      .shaderBufferFloat16AtomicMinMax      = false,
+      .shaderBufferFloat32AtomicMinMax      = true,
+      .shaderBufferFloat64AtomicMinMax      = false,
+      .shaderSharedFloat16Atomics           = false,
+      .shaderSharedFloat16AtomicAdd         = false,
+      .shaderSharedFloat16AtomicMinMax      = false,
+      .shaderSharedFloat32AtomicMinMax      = true,
+      .shaderSharedFloat64AtomicMinMax      = false,
+      .shaderImageFloat32AtomicMinMax       = false,
+      /* ROVs serialize pixel-frequency UAV accesses.  D3D12 has no native
+       * sample- or shading-rate-frequency interlock equivalent.
+       */
+      .fragmentShaderSampleInterlock         = false,
+      .fragmentShaderPixelInterlock          = pdev->options.ROVsSupported,
+      .fragmentShaderShadingRateInterlock    = false,
       .conditionalRendering               = true,
       .pipelineRobustness                  = true,
       .indexTypeUint8                      = true,

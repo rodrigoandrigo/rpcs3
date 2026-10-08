@@ -296,6 +296,56 @@ dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type)
 }
 
 nir_shader *
+dzn_nir_large_point_draw_args_shader(void)
+{
+   nir_builder b =
+      nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,
+                                     dxil_get_base_nir_compiler_options(),
+                                     "dzn_large_point_draw_args");
+
+   /* b0 contains the byte stride of one captured point.  t1 is the native
+    * 64-bit SO filled-size counter and u2 receives D3D12_DRAW_ARGUMENTS.
+    * The replay VS emits two triangles (six vertices) per captured point.
+    */
+   nir_def *params =
+      dzn_nir_create_bo_desc(&b, nir_var_mem_ubo, 0, 0, "params", 0);
+   nir_def *counter =
+      dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 1, "so_counter",
+                             ACCESS_NON_WRITEABLE);
+   nir_def *args =
+      dzn_nir_create_bo_desc(&b, nir_var_mem_ssbo, 0, 2, "draw_args",
+                             ACCESS_NON_READABLE);
+   nir_def *stride =
+      nir_load_ubo(&b, 1, 32, params, nir_imm_int(&b, 0),
+                   .align_mul = 4, .range_base = 0, .range = 4);
+   nir_def *filled =
+      nir_load_ssbo(&b, 2, 32, counter, nir_imm_int(&b, 0),
+                    .align_mul = 8, .access = ACCESS_NON_WRITEABLE);
+
+   /* SO buffers are bounded to 32-bit D3D12 view sizes.  Still reject a
+    * malformed zero stride and clamp the quotient before producing indirect
+    * arguments, rather than allowing a divide-by-zero or silent wrap. */
+   nir_def *valid_stride = nir_ine_imm(&b, stride, 0);
+   nir_def *safe_stride =
+      nir_bcsel(&b, valid_stride, stride, nir_imm_int(&b, 1));
+   nir_def *aligned = nir_ieq_imm(
+      &b, nir_umod(&b, nir_channel(&b, filled, 0), safe_stride), 0);
+   nir_def *valid = nir_iand(&b, valid_stride, aligned);
+   nir_def *points =
+      nir_bcsel(&b, valid,
+                nir_udiv(&b, nir_channel(&b, filled, 0), safe_stride),
+                nir_imm_int(&b, 0));
+   nir_def *draw[4] = {
+      nir_imm_int(&b, 6), points, nir_imm_int(&b, 0), nir_imm_int(&b, 0),
+   };
+   nir_store_ssbo(&b, nir_vec(&b, draw, ARRAY_SIZE(draw)), args,
+                  nir_imm_int(&b, 0), .write_mask = 0xf,
+                  .access = ACCESS_NON_READABLE, .align_mul = 16);
+
+   return b.shader;
+}
+
+nir_shader *
 dzn_nir_list_restart_rewrite_index_shader(uint8_t old_index_size, unsigned width)
 {
    nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_COMPUTE,

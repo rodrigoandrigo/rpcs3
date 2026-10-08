@@ -89,6 +89,11 @@ struct dzn_indirect_draw_type {
 nir_shader *
 dzn_nir_indirect_draw_shader(struct dzn_indirect_draw_type type);
 
+/* Convert a D3D12 stream-output filled-size counter (bytes) into the
+ * non-indexed indirect draw used by the large-point replay pass. */
+nir_shader *
+dzn_nir_large_point_draw_args_shader(void);
+
 nir_shader *
 dzn_nir_triangle_fan_rewrite_index_shader(uint8_t old_index_size);
 
