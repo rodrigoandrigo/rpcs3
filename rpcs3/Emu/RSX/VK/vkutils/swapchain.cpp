@@ -149,7 +149,7 @@ namespace vk
 
 	std::pair<VkSurfaceCapabilitiesKHR, bool> swapchain_WSI::init_surface_capabilities()
 	{
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(RPCS3_UWP_DZN)
 		if (g_cfg.video.vk.exclusive_fullscreen_mode != vk_exclusive_fs_mode::unspecified && dev.get_surface_capabilities_2_support())
 		{
 			HMONITOR hmonitor = MonitorFromWindow(window_handle, MONITOR_DEFAULTTOPRIMARY);

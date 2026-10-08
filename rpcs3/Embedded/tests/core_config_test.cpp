@@ -143,12 +143,20 @@ int main(int argc, char** argv)
     check(set("Audio/Renderer", "Cubeb") == RPCS3_CORE_UNSUPPORTED_RENDERER, "reject unavailable backend");
     if (entries.at("Video/Renderer").choices.find("Mesa Gallium D3D12") != std::string::npos) {
         check(entries.at("Video/Renderer").defaults == "OpenGL (Mesa Gallium D3D12)", "OpenGL default renderer");
-        check(entries.at("Video/Renderer").choices == "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)",
-            "D3D12 first and Mesa OpenGL second");
+        const bool dozen = entries.at("Video/Renderer").choices.find("Mesa Dozen") != std::string::npos;
+        check(entries.at("Video/Renderer").choices == (dozen ?
+            "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)\x1fVulkan (Mesa Dozen D3D12)" :
+            "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)"), "available embedded renderers");
         check(set("Video/Renderer", "OpenGL (Mesa Gallium D3D12)") == 0, "select Mesa OpenGL");
         snapshot();
         check(entries.at("Video/Renderer").value == "OpenGL (Mesa Gallium D3D12)", "Mesa selection survives normalization");
         check(set("Video/Renderer", "Vulkan") == RPCS3_CORE_UNSUPPORTED_RENDERER, "reject unavailable Vulkan");
+        if (dozen) {
+            check(set("Video/Renderer", "Vulkan (Mesa Dozen D3D12)") == 0, "select Mesa Dozen Vulkan");
+            snapshot();
+            check(entries.at("Video/Renderer").value == "Vulkan (Mesa Dozen D3D12)", "Vulkan selection survives normalization");
+            check(!(entries.at("Video/Vulkan/Adapter").flags & RPCS3_CORE_CONFIG_READ_ONLY), "Vulkan adapter configuration available");
+        }
         check(set("Video/Renderer", "Direct3D 12") == 0, "restore D3D12");
     }
     check(entries.at("Audio/Renderer").value == "XAudio2", "UWP XAudio2 output selected");

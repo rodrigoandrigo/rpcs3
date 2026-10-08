@@ -352,7 +352,7 @@ TextureHandle D3D12Renderer::ImportCoreFrame(ID3D12Resource* resource)
 	if (!resource) return {};
 	const auto desc = resource->GetDesc();
 	if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
-		desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM || desc.SampleDesc.Count != 1)
+		!IsCoreVideoFormat(desc.Format) || desc.SampleDesc.Count != 1)
 		throw std::runtime_error("Unsupported RPCS3 frame texture");
 	Microsoft::WRL::ComPtr<ID3D12Device> owner;
 	Check(resource->GetDevice(IID_PPV_ARGS(owner.GetAddressOf())), "Query RPCS3 frame device");

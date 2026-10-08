@@ -51,6 +51,15 @@ add_library(rpcs3_core SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/Embedded/audio_source.cpp
 )
 target_compile_definitions(rpcs3_core PRIVATE RPCS3_CORE_EXPORTS UNICODE _UNICODE)
+if(RPCS3_UWP_DZN)
+    target_sources(rpcs3_core PRIVATE Embedded/vulkan_frame.cpp)
+    if(NOT EXISTS "${RPCS3_UWP_DZN_ROOT}/src/microsoft/vulkan/vulkan_dzn.dll")
+        message(FATAL_ERROR "Build Mesa Dozen before enabling RPCS3_UWP_DZN")
+    endif()
+    add_custom_command(TARGET rpcs3_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${RPCS3_UWP_DZN_ROOT}/src/microsoft/vulkan/vulkan_dzn.dll" "$<TARGET_FILE_DIR:rpcs3_core>"
+        VERBATIM)
+endif()
 if(RPCS3_UWP_MESA)
     target_sources(rpcs3_core PRIVATE Embedded/mesa_frame.cpp)
     foreach(mesa_dll IN ITEMS src/gallium/targets/libgl-gdi/opengl32.dll src/gallium/targets/wgl/gallium_wgl.dll src/gallium/targets/libgl-gdi/dxil.dll)

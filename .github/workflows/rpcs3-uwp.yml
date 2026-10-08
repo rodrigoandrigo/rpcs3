@@ -83,15 +83,18 @@ jobs:
       - name: Build embedded Mesa Gallium D3D12
         run: ./RPCS3-UWP/Build-Mesa.ps1 -Jobs 4
 
+      - name: Build embedded Mesa Dozen D3D12
+        run: ./RPCS3-UWP/Build-Mesa.ps1 -Jobs 4 -Dozen
+
       - name: Build Qt-free RPCS3 DLL
-        run: ./RPCS3-UWP/Build-Core.ps1 -Configuration Release -MesaOpenGL -ExperimentalD3D12 -SdlSource "$env:GITHUB_WORKSPACE/.ci/SDL3_UWP"
+        run: ./RPCS3-UWP/Build-Core.ps1 -Configuration Release -MesaOpenGL -MesaVulkan -ExperimentalD3D12 -SdlSource "$env:GITHUB_WORKSPACE/.ci/SDL3_UWP"
 
       - name: Build frontend and package
-        run: ./RPCS3-UWP/Build-Host.ps1 -Configuration Release -MesaOpenGL
+        run: ./RPCS3-UWP/Build-Host.ps1 -Configuration Release -MesaOpenGL -MesaVulkan
 
       - name: Audit UWP imports
         run: |
-          $dlls = @('build-uwp-msvc/core/bin/rpcs3-core.dll', 'build-uwp-msvc/mesa/src/gallium/targets/wgl/gallium_wgl.dll', 'build-uwp-msvc/mesa/src/gallium/targets/libgl-gdi/opengl32.dll', 'build-uwp-msvc/mesa/src/gallium/targets/libgl-gdi/dxil.dll')
+          $dlls = @('build-uwp-msvc/core/bin/rpcs3-core.dll', 'build-uwp-msvc/mesa/src/gallium/targets/wgl/gallium_wgl.dll', 'build-uwp-msvc/mesa/src/gallium/targets/libgl-gdi/opengl32.dll', 'build-uwp-msvc/mesa/src/gallium/targets/libgl-gdi/dxil.dll', 'build-uwp-msvc/mesa-dozen-port/src/microsoft/vulkan/vulkan_dzn.dll')
           ./RPCS3-UWP/Audit-Uwp.ps1 -Dll $dlls[0] -PackageDlls $dlls -PackageManifest RPCS3-UWP/FrontendHost/UWP-App/Package.appxmanifest
 
       - name: Sign and verify package

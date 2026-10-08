@@ -4,6 +4,11 @@
 
 int main()
 {
+    using UwpImGuiFrontend::Sample::IsCoreVideoFormat;
+    static_assert(IsCoreVideoFormat(DXGI_FORMAT_R8G8B8A8_UNORM));
+    static_assert(IsCoreVideoFormat(DXGI_FORMAT_B8G8R8A8_UNORM));
+    static_assert(!IsCoreVideoFormat(DXGI_FORMAT_R16G16B16A16_FLOAT));
+    static_assert(!IsCoreVideoFormat(DXGI_FORMAT_UNKNOWN));
     constexpr auto mapping = UwpImGuiFrontend::Sample::CoreVideoComponentMapping;
     for (unsigned channel = 0; channel < 3; ++channel)
         if (D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(channel, mapping) != channel) return 1;

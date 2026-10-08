@@ -1,13 +1,63 @@
 # RPCS3-UWP
 
-RPCS3-UWP is an experimental UWP host for the RPCS3 PlayStation 3 emulator. It embeds a Qt-free RPCS3 core DLL, presents the emulator through an ImGui frontend, and offers the restored Direct3D 12 renderer and OpenGL through Mesa Gallium D3D12 in the UWP application's swap chain.
+RPCS3-UWP is an experimental UWP host for the RPCS3 PlayStation 3 emulator. It embeds a Qt-free RPCS3 core DLL, presents the emulator through an ImGui frontend, and offers the restored Direct3D 12 renderer, OpenGL through Mesa Gallium D3D12, and Vulkan through Mesa Dozen in the UWP application's swap chain.
 
 The project is intended for Windows UWP/AppContainer environments and Xbox development scenarios. It is not an upstream RPCS3 build and does not use the desktop Qt frontend.
+
+## Embedded Vulkan / Mesa Dozen
+
+Version 1.0.0.67 fixes black-screen presentation caused by the frontend
+rejecting Dozen's BGRA texture format. Typed BGRA and RGBA shader-resource
+views are accepted without manually swapping color channels. Offscreen
+Vulkan images are also released before the allocator's shutdown leak audit.
+
+The optional Vulkan renderer uses `RPCS3 Vulkan -> Mesa DZN -> D3D12`.
+The core loads **only the packaged `vulkan_dzn.dll`**, through the package
+graph. It does not use `vulkan-1.dll`, registry ICD discovery, a desktop Vulkan
+SDK runtime, HWND, GDI, or a desktop presentation window. OpenGL remains the
+default; select **Vulkan (Mesa Dozen D3D12)** in Graphics settings.
+
+Build both Mesa backends and the core/host with MSVC:
+
+```powershell
+./RPCS3-UWP/Build-Mesa.ps1
+./RPCS3-UWP/Build-Mesa.ps1 -Dozen
+./RPCS3-UWP/Build-Core.ps1 -MesaOpenGL -MesaVulkan
+./RPCS3-UWP/Build-Host.ps1 -MesaOpenGL -MesaVulkan
+```
+
+`RPCS3-UWP.slnx` runs the same dual-renderer workflow. Use
+`RPCS3_MESON_PYTHON` for a Python installation containing Meson and its build
+dependencies. Dozen is built separately in `build-uwp-msvc/mesa-dozen-port`.
+The host packages its ICD DLL and the SDK DXIL validator alongside the core.
+
+Presentation currently uses Vulkan offscreen BGRA images, a completed GPU
+readback, and upload to an immutable D3D12 texture consumed by the existing
+full-window frontend. This is a compatibility baseline, **not zero-copy**;
+readback and allocation overhead can affect performance. Output is currently
+1280x720 and follows the host's aspect-ratio fitting. Only one embedded Vulkan
+instance and one logical device are supported at a time.
+
+Native queue/readback probes, successful compilation, and import audits do not
+establish game or Xbox compatibility. Dozen still has known depth precision
+limitations; unsupported extensions must not be enabled merely to satisfy
+RPCS3 feature requests. The offline `dozen_context_test.cpp` is excluded from
+the shipping application and exercises Vulkan 1.2 queue/readback and restart.
+
+Local validation for version 1.0.0.66: the MSVC WindowsStore core and frontend
+built successfully; static import auditing reported zero findings. Native
+tests on Radeon RX 6600M passed required Vulkan feature queries, SPIR-V/NIR/DXIL
+compute pipeline creation and dispatch, BGRA image readback, and device restart.
+The core configuration test passed all 274 entries, including Vulkan selection
+and reset to OpenGL. The signed MSIX bundle was verified and its five core/Mesa
+DLL hashes matched the build outputs. No installed-app, game, or Xbox execution
+was performed for this integration. Mesa Dozen remains non-conformant and
+experimental; these probes do not establish complete RPCS3 rendering accuracy.
 
 ## GitHub Actions: complete signed build
 
 The workflow `.github/workflows/rpcs3-uwp.yml` builds Release x64 from source:
-UWP FFmpeg, embedded Mesa OpenGL/Gallium D3D12, the Qt-free RPCS3 DLL,
+UWP FFmpeg, embedded Mesa OpenGL/Gallium D3D12 and Vulkan/Dozen, the Qt-free RPCS3 DLL,
 the UWP frontend and its MSIX bundle. It uses the `windows-2025-vs2026`
 runner (MSVC/Visual Studio 2026 and Windows SDK), with MSYS2 UCRT64 tools.
 SDL is checked out from [rodrigoandrigo/SDL3_UWP](https://github.com/rodrigoandrigo/SDL3_UWP)
@@ -228,8 +278,9 @@ Build the layers individually with:
 
 ```powershell
 .\RPCS3-UWP\Build-Mesa.ps1 -Python python  # Or the configured Meson Python executable
-.\RPCS3-UWP\Build-Core.ps1 -ExperimentalD3D12 -MesaOpenGL
-.\RPCS3-UWP\Build-Host.ps1 -MesaOpenGL
+.\RPCS3-UWP\Build-Mesa.ps1 -Python python -Dozen
+.\RPCS3-UWP\Build-Core.ps1 -ExperimentalD3D12 -MesaOpenGL -MesaVulkan
+.\RPCS3-UWP\Build-Host.ps1 -MesaOpenGL -MesaVulkan
 ```
 
 The initial presentation bridge reads the offscreen OpenGL back buffer on the

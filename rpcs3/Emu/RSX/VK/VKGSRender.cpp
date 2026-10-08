@@ -412,6 +412,9 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 
 	if (!m_instance.create("RPCS3"))
 	{
+#ifdef RPCS3_UWP_DZN
+		fmt::throw_exception("Packaged Mesa DZN could not initialize Vulkan 1.2");
+#endif
 		rsx_log.fatal("Could not find a Vulkan compatible GPU driver. Your GPU(s) may not support Vulkan, or you need to install the Vulkan runtime and drivers");
 		m_device = VK_NULL_HANDLE;
 		return;
@@ -425,6 +428,9 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	// This should not happen unless something is wrong with the driver setup on the target system
 	if (gpus.empty())
 	{
+#ifdef RPCS3_UWP_DZN
+		fmt::throw_exception("Mesa DZN found no compatible D3D12 adapter");
+#endif
 		//We can't throw in Emulator::Load, so we show error and return
 		rsx_log.fatal("No compatible GPU devices found");
 		m_device = VK_NULL_HANDLE;
@@ -463,6 +469,9 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 
 	if (!m_swapchain)
 	{
+#ifdef RPCS3_UWP_DZN
+		fmt::throw_exception("Mesa DZN could not initialize the UWP offscreen swapchain");
+#endif
 		m_device = VK_NULL_HANDLE;
 		rsx_log.fatal("Could not successfully initialize a swapchain");
 		return;
@@ -477,6 +486,9 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
 	{
+#ifdef RPCS3_UWP_DZN
+		fmt::throw_exception("Mesa DZN offscreen swapchain initialization failed");
+#endif
 		swapchain_unavailable = true;
 	}
 
@@ -887,6 +899,11 @@ VKGSRender::~VKGSRender()
 	vk::descriptors::flush();
 
 	// Global resources
+#ifdef RPCS3_UWP_DZN
+	// Offscreen images own tracked allocations. Release them before the global
+	// allocator's final leak audit, but keep the logical device alive.
+	m_swapchain->destroy(false);
+#endif
 	vk::destroy_global_resources();
 
 	// Device handles/contexts

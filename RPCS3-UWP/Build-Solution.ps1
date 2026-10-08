@@ -24,9 +24,11 @@ if ($Action -in @('Clean', 'Rebuild')) {
 $mesaPython = if ($env:RPCS3_MESON_PYTHON) { $env:RPCS3_MESON_PYTHON } else { 'python' }
 & (Join-Path $PSScriptRoot 'Build-Mesa.ps1') -Python $mesaPython
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
-& (Join-Path $PSScriptRoot 'Build-Core.ps1') -Configuration $Configuration -ExperimentalD3D12 -MesaOpenGL
+& (Join-Path $PSScriptRoot 'Build-Mesa.ps1') -Python $mesaPython -Dozen
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
-& (Join-Path $PSScriptRoot 'Build-Host.ps1') -Configuration $Configuration -MesaOpenGL
+& (Join-Path $PSScriptRoot 'Build-Core.ps1') -Configuration $Configuration -ExperimentalD3D12 -MesaOpenGL -MesaVulkan
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot 'Build-Host.ps1') -Configuration $Configuration -MesaOpenGL -MesaVulkan
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 $certificate = Join-Path $PSScriptRoot 'RPCS3-UWP_TemporaryKey.pfx'

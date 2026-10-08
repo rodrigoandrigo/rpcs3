@@ -527,7 +527,16 @@ namespace vk
 		}
 
 		// Set up instance information
-		std::vector<const char*> requested_extensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+		std::vector<const char*> requested_extensions;
+#ifdef RPCS3_UWP_DZN
+		const supported_extensions dzn_extensions(supported_extensions::device, nullptr, *pgpu);
+		if (!dzn_extensions.is_supported(VK_EXT_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_EXTENSION_NAME))
+			fmt::throw_exception("Mesa DZN lacks the unsized uniform buffer feature required by RPCS3");
+		requested_extensions.push_back(VK_EXT_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_EXTENSION_NAME);
+#endif
+#ifndef RPCS3_UWP_DZN
+		requested_extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+#endif
 
 		// Enable hardware features manually
 		// Currently we require:

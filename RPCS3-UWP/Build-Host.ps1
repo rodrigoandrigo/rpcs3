@@ -4,6 +4,7 @@ param(
     [switch]$FrontendOnly,
     [switch]$ConfigureOnly,
     [switch]$MesaOpenGL,
+    [switch]$MesaVulkan,
     [string]$VcpkgRoot
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,7 @@ $hostBuild = Join-Path $repositoryRoot 'build-uwp-msvc\host'
 $coreBuild = Join-Path $repositoryRoot 'build-uwp-msvc\core'
 $withCore = if ($FrontendOnly) { 'OFF' } else { 'ON' }
 $withMesa = if ($MesaOpenGL -and -not $FrontendOnly) { 'ON' } else { 'OFF' }
+$withDozen = if ($MesaVulkan -and -not $FrontendOnly) { 'ON' } else { 'OFF' }
 & 'C:\msys64\ucrt64\bin\cmake.exe' -S $PSScriptRoot -B $hostBuild `
     -G 'Visual Studio 18 2026' -A x64 `
     '-DCMAKE_SYSTEM_NAME=WindowsStore' '-DCMAKE_SYSTEM_VERSION=10.0' `
@@ -25,6 +27,7 @@ $withMesa = if ($MesaOpenGL -and -not $FrontendOnly) { 'ON' } else { 'OFF' }
     "-DVCPKG_OVERLAY_TRIPLETS=$PSScriptRoot/Frontend/cmake/triplets" `
     "-DRPCS3_HOST_WITH_CORE=$withCore" `
     "-DRPCS3_HOST_MESA=$withMesa" `
+    "-DRPCS3_HOST_DZN=$withDozen" `
     "-DRPCS3_CORE_DLL=$coreBuild/bin/rpcs3-core.dll" `
     "-DRPCS3_CORE_IMPLIB=$coreBuild/rpcs3/$Configuration/rpcs3-core.lib"
 if ($LASTEXITCODE) { exit $LASTEXITCODE }

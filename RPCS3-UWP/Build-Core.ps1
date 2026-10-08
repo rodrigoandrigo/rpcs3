@@ -4,10 +4,14 @@ param(
     [switch]$ConfigureOnly,
     [switch]$ExperimentalD3D12,
     [switch]$MesaOpenGL,
+    [switch]$MesaVulkan,
     [string]$FfmpegRoot,
     [string]$SdlSource = $env:RPCS3_SDL3_SOURCE_DIR
 )
 $ErrorActionPreference = 'Stop'
+if ($MesaVulkan -and -not $MesaOpenGL) {
+    throw 'Use -MesaOpenGL -MesaVulkan together; OpenGL remains the default renderer.'
+}
 . (Join-Path $PSScriptRoot 'Enter-MsvcEnvironment.ps1')
 $repositoryRoot = Split-Path $PSScriptRoot -Parent
 $coreBuild = Join-Path $repositoryRoot 'build-uwp-msvc\core'
@@ -33,10 +37,12 @@ Write-Host "Mesa build root: $mesaRoot"
 $d3d12Option = if ($ExperimentalD3D12) { 'ON' } else { 'OFF' }
 $mesaOption = if ($MesaOpenGL) { 'ON' } else { 'OFF' }
 if ($MesaOpenGL) { $d3d12Option = 'ON' }
+$vulkanOption = if ($MesaVulkan) { 'ON' } else { 'OFF' }
+if ($MesaVulkan) { $d3d12Option = 'ON' }
 & $cmake -S $repositoryRoot -B $coreBuild -G 'Visual Studio 18 2026' -A x64 `
     '-DCMAKE_SYSTEM_NAME=WindowsStore' '-DCMAKE_SYSTEM_VERSION=10.0' `
     '-DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=10.0.26100.0' `
-    '-DRPCS3_BUILD_CORE_DLL=ON' '-DWITH_LLVM=OFF' '-DUSE_VULKAN=OFF' `
+    '-DRPCS3_BUILD_CORE_DLL=ON' '-DWITH_LLVM=OFF' "-DUSE_VULKAN=$vulkanOption" "-DRPCS3_UWP_DZN=$vulkanOption" `
     "-DRPCS3_UWP_FFMPEG_ROOT=$FfmpegRoot" `
     "-DRPCS3_UWP_D3D12=$d3d12Option" `
     "-DRPCS3_UWP_MESA=$mesaOption" `

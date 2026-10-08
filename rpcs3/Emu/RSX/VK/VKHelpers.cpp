@@ -130,7 +130,9 @@ namespace vk
 			break;
 		case driver_vendor::DOZEN:
 			// This driver is often picked by mistake when the user meant to select something else. Complain loudly.
-#ifdef _WIN32
+#if defined(RPCS3_UWP_DZN)
+			rsx_log.notice("Using the packaged Mesa Dozen D3D12 embedding driver");
+#elif defined(_WIN32)
 			MessageBox(NULL,
 				L"You're attempting to run rpcs3 on Microsoft's Dozen driver that emulates vulkan on top of Direct3D12.\n"
 				"This driver is unsupported. You should use your vendor's vulkan driver whenever possible.",

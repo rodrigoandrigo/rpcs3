@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Python = 'python', [int]$Jobs = 4,
+param([string]$Python = 'python', [int]$Jobs = 4, [switch]$Dozen,
     [string]$RuntimeRoot = $env:RPCS3_UWP_VCLIBS_ROOT)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Enter-MsvcEnvironment.ps1')
@@ -17,6 +17,7 @@ if (-not (Test-Path (Join-Path $RuntimeRoot 'vcruntime140_app.dll'))) { throw "U
 $env:PATH += ';' + $RuntimeRoot
 $mesaRepoRoot = Split-Path $PSScriptRoot -Parent
 $mesaBuildRoot = Join-Path $mesaRepoRoot 'build-uwp-msvc\mesa'
+if ($Dozen) { $mesaBuildRoot = Join-Path $mesaRepoRoot 'build-uwp-msvc\mesa-dozen-port' }
 $mesaSourceRoot = Join-Path $mesaRepoRoot '3rdparty\mesa'
 $mesaStoreCRT = (Join-Path $env:VCToolsInstallDir 'lib\x64\store').Replace('\', '/')
 if (-not (Test-Path -LiteralPath $mesaStoreCRT)) { throw "UWP C++ runtime libraries missing: $mesaStoreCRT" }
@@ -34,6 +35,10 @@ $mesaArguments = @('setup', $mesaBuildRoot, $mesaSourceRoot,
 # explicitly so Mesa imports *_app.dll, not the desktop VC runtime.
 $mesaArguments += "-Dc_link_args=['/APPCONTAINER','WindowsApp.lib','/LIBPATH:$mesaStoreCRT']"
 $mesaArguments += "-Dcpp_link_args=['/APPCONTAINER','WindowsApp.lib','/LIBPATH:$mesaStoreCRT','/MAP']"
+if ($Dozen) {
+    $mesaArguments = $mesaArguments | Where-Object { $_ -notmatch '^-D(opengl|gallium-drivers|vulkan-drivers)=' }
+    $mesaArguments += @('-Dopengl=false', '-Dgallium-drivers=', '-Dvulkan-drivers=microsoft-experimental')
+}
 if (Test-Path (Join-Path $mesaBuildRoot 'meson-private\coredata.dat')) {
     $mesaArguments += '--reconfigure'
 }
@@ -43,6 +48,12 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $dxil = Join-Path $env:WindowsSdkDir 'Redist\D3D\x64\dxil.dll'
 if (-not (Test-Path -LiteralPath $dxil -PathType Leaf)) { throw "Windows SDK DXIL redistributable missing: $dxil" }
+if ($Dozen) {
+    $dznOutput = Join-Path $mesaBuildRoot 'src\microsoft\vulkan'
+    if (-not (Test-Path (Join-Path $dznOutput 'vulkan_dzn.dll'))) { throw 'Mesa Dozen DLL was not built' }
+    Copy-Item -LiteralPath $dxil -Destination (Join-Path $dznOutput 'dxil.dll')
+    exit 0
+}
 Copy-Item -LiteralPath $dxil -Destination (Join-Path $mesaBuildRoot 'src\gallium\targets\libgl-gdi\dxil.dll')
 foreach ($artifact in @('src/gallium/targets/libgl-gdi/opengl32.lib',
     'src/gallium/targets/libgl-gdi/opengl32.dll', 'src/gallium/targets/wgl/gallium_wgl.dll',

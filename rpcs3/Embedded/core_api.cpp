@@ -14,6 +14,10 @@
 #include "Emu/IdManager.h"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/D3D12/D3D12Presentation.h"
+#ifdef RPCS3_UWP_DZN
+#include "Emu/RSX/VK/VKGSRender.h"
+#include "vulkan_frame.h"
+#endif
 #ifdef RPCS3_UWP_MESA
 #include "Emu/RSX/GL/GLGSRender.h"
 #include "mesa_frame.h"
@@ -88,7 +92,11 @@ namespace
 			path == "Audio/Microphone Type") return "Only the Null handler is integrated for this device";
 		if (path == "Net/UPNP Enabled") return "UPnP is excluded from the UWP build";
 		if (path == "Net/Derive MAC from PSID") return "The UWP core derives the MAC address from the emulated PSID";
+#ifndef RPCS3_UWP_DZN
 		if (path.starts_with("Video/Vulkan/")) return "Vulkan is excluded from the UWP build";
+#else
+		if (path == "Video/Vulkan/Exclusive Fullscreen Mode") return "The UWP frontend owns fullscreen presentation; desktop exclusive mode is unavailable";
+#endif
 		if (path.starts_with("Mounts/")) return "Storage locations require a brokered picker grant";
 		if (path.starts_with("IPC/")) return "Desktop IPC is not integrated in this host";
 		return {};
@@ -101,6 +109,9 @@ namespace
 
 	void normalize_host_settings()
 	{
+#ifdef RPCS3_UWP_DZN
+		if (g_cfg.video.renderer != video_renderer::vulkan)
+#endif
 #ifdef RPCS3_UWP_MESA
 		if (g_cfg.video.renderer != video_renderer::opengl)
 #endif
@@ -189,6 +200,10 @@ namespace
 				entry.value = g_cfg.video.renderer == video_renderer::opengl ? "OpenGL (Mesa Gallium D3D12)" : "Direct3D 12";
 				entry.default_value = "OpenGL (Mesa Gallium D3D12)";
 				entry.enum_values = "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)";
+#ifdef RPCS3_UWP_DZN
+				entry.enum_values += "\x1fVulkan (Mesa Dozen D3D12)";
+				if (g_cfg.video.renderer == video_renderer::vulkan) entry.value = "Vulkan (Mesa Dozen D3D12)";
+#endif
 			}
 #endif
 			output.push_back(std::move(entry));
@@ -359,6 +374,14 @@ namespace
 		cb.init_gs_render = [](utils::serial* ar)
 		{
 			normalize_host_settings();
+#ifdef RPCS3_UWP_DZN
+			if (g_cfg.video.renderer == video_renderer::vulkan)
+			{
+				(void)d3d12::presentation().device_and_queue();
+				g_fxo->init<rsx::thread, named_thread<VKGSRender>>(ar);
+				return;
+			}
+#endif
 #ifdef RPCS3_UWP_MESA
 			if (g_cfg.video.renderer == video_renderer::opengl)
 			{
@@ -386,6 +409,9 @@ namespace
 		};
 		cb.get_gs_frame = []() -> std::unique_ptr<GSFrameBase>
 		{
+#ifdef RPCS3_UWP_DZN
+			if (g_cfg.video.renderer == video_renderer::vulkan) return make_vulkan_frame();
+#endif
 #ifdef RPCS3_UWP_MESA
 			if (g_cfg.video.renderer == video_renderer::opengl) return make_mesa_frame();
 #endif
@@ -543,7 +569,11 @@ int32_t rpcs3_core_initialize(const char* state_root) try
 			Emu.SetHeadless(false);
 			Emu.SetSupportedRenderers({video_renderer::null});
 #ifdef RPCS3_UWP_MESA
+#ifdef RPCS3_UWP_DZN
+			Emu.SetSupportedRenderers({video_renderer::null, video_renderer::opengl, video_renderer::vulkan});
+#else
 			Emu.SetSupportedRenderers({video_renderer::null, video_renderer::opengl});
+#endif
 			Emu.SetDefaultRenderer(video_renderer::opengl);
 #else
 			Emu.SetDefaultRenderer(video_renderer::null);
@@ -842,6 +872,9 @@ int32_t rpcs3_core_set_config(const char* path_utf8, const char* value_utf8) try
 	{
 		if (value == "Direct3D 12") value = "Null";
 		else if (value == "OpenGL (Mesa Gallium D3D12)") value = "OpenGL";
+#ifdef RPCS3_UWP_DZN
+		else if (value == "Vulkan (Mesa Dozen D3D12)") value = "Vulkan";
+#endif
 		else return RPCS3_CORE_UNSUPPORTED_RENDERER;
 	}
 #endif
@@ -882,6 +915,10 @@ int32_t rpcs3_core_reset_config(const char* prefix_utf8) try
 		if (prefix == "Mounts" || prefix == "IPC") return RPCS3_CORE_INVALID_ARGUMENT;
 		const auto previous = item->to_yaml();
 		item->from_default();
+#ifdef RPCS3_UWP_MESA
+		if (prefix.empty() || prefix == "Video" || prefix == "Video/Renderer")
+			g_cfg.video.renderer.set(video_renderer::opengl);
+#endif
 		normalize_host_settings();
 		if (!save_current_config())
 		{

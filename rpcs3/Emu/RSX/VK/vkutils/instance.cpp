@@ -119,7 +119,9 @@ namespace vk
 			extensions_loaded = true;
 			supported_extensions support(supported_extensions::instance);
 
+#ifndef RPCS3_UWP_DZN
 			extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+#endif
 			if (support.is_supported(VK_EXT_DEBUG_REPORT_EXTENSION_NAME))
 			{
 				extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
@@ -154,7 +156,9 @@ namespace vk
 				extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 			}
 
-#ifdef _WIN32
+#if defined(RPCS3_UWP_DZN)
+			// The embedding frontend presents the completed offscreen texture.
+#elif defined(_WIN32)
 			extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #elif defined(__APPLE__)
 			extensions.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
@@ -187,8 +191,10 @@ namespace vk
 				return 0;
 			}
 #endif //(WIN32, __APPLE__)
+#ifndef RPCS3_UWP_DZN
 			if (g_cfg.video.debug_output)
 				layers.push_back("VK_LAYER_KHRONOS_validation");
+#endif
 		}
 #ifdef __APPLE__ 
 		// MoltenVK's ICD will not be detected without these extensions enabled.
@@ -286,6 +292,19 @@ namespace vk
 
 	swapchain_base* instance::create_swapchain(display_handle_t window_handle, vk::physical_device& dev)
 	{
+#ifdef RPCS3_UWP_DZN
+		for (u32 i = 0; i < dev.get_queue_count(); ++i)
+		{
+			constexpr auto required = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+			if ((dev.get_queue_properties(i).queueFlags & required) == required)
+			{
+				auto* result = new swapchain_NATIVE(dev, umax, i, i);
+				result->create(window_handle);
+				return result;
+			}
+		}
+		return nullptr;
+#else
 		WSI_config surface_config
 		{
 			.supports_automatic_wm_reports = true
@@ -398,5 +417,6 @@ namespace vk
 		color_space = surfFormats[0].colorSpace;
 
 		return new swapchain_WSI(dev, present_queue_idx, graphics_queue_idx, transfer_queue_idx, format, m_surface, color_space, !surface_config.supports_automatic_wm_reports);
+#endif
 	}
 }
