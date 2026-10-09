@@ -6,6 +6,7 @@
 #include "sampler.h"
 
 #include "../VKResourceManager.h"
+#include "../VKHelpers.h"
 #include <memory>
 
 namespace vk
@@ -128,6 +129,8 @@ namespace vk
 		info.flags &= ~VK_IMAGE_CREATE_SPECIAL_FLAGS_RPCS3;
 
 		CHECK_RESULT(vkCreateImage(m_device, &info, nullptr, &value));
+		try
+		{
 
 		VkMemoryRequirements memory_req;
 		vkGetImageMemoryRequirements(m_device, value, &memory_req);
@@ -151,7 +154,25 @@ namespace vk
 		if (auto device_mem = memory->get_vk_device_memory();
 			device_mem != VK_NULL_HANDLE) [[likely]]
 		{
-			CHECK_RESULT(vkBindImageMemory(m_device, value, device_mem, memory->get_vk_device_memory_offset()));
+			auto result = vkBindImageMemory(m_device, value, device_mem, memory->get_vk_device_memory_offset());
+#ifdef RPCS3_UWP_DZN
+			// Dozen creates the placed D3D12 resource at bind time, so allocation
+			// recovery alone does not cover resource residency failures.
+			if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && !vk::is_uninterruptible())
+			{
+				if (vmm_handle_memory_pressure(rsx::problem_severity::fatal))
+					result = vkBindImageMemory(m_device, value, device_mem, memory->get_vk_device_memory_offset());
+			}
+#endif
+			if (result != VK_SUCCESS)
+			{
+				// Fault callbacks can start emulator teardown before the exception
+				// unwinds. Do not leave a tracked allocation live during that audit.
+				vkDestroyImage(m_device, value, nullptr);
+				value = VK_NULL_HANDLE;
+				memory.reset();
+			}
+			CHECK_RESULT(result);
 			current_layout = info.initialLayout;
 		}
 		else
@@ -159,6 +180,16 @@ namespace vk
 			ensure(nullable);
 			vkDestroyImage(m_device, value, nullptr);
 			value = VK_NULL_HANDLE;
+		}
+		}
+		catch (...)
+		{
+			// A failed constructor never calls ~image. Release the image before
+			// its allocation, including errors during type selection or binding.
+			vkDestroyImage(m_device, value, nullptr);
+			value = VK_NULL_HANDLE;
+			memory.reset();
+			throw;
 		}
 	}
 

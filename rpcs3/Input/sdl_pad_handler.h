@@ -71,6 +71,7 @@ public:
 	sdl_info sdl{};
 #ifdef RPCS3_UWP
 	int uwp_slot = -1;
+	bool uwp_direct = false;
 #endif
 
 	std::array<f32, 3> values_accel{};

@@ -2151,6 +2151,7 @@ void MinimalFrontend::Shutdown()
 	if (!m_initialized)
 		return;
 	m_frontend->Shutdown();
+	m_renderer->ClearTextures();
 	m_host.AttachFrontend(nullptr);
 	ShutdownNativeTextInput();
 	m_initialized = false;

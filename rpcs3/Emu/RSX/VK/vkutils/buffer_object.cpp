@@ -60,6 +60,8 @@ namespace vk
 		info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
 		CHECK_RESULT(vkCreateBuffer(m_device, &info, nullptr, &value));
+		try
+		{
 
 		// Allocate vram for this buffer
 		VkMemoryRequirements memory_reqs;
@@ -85,13 +87,28 @@ namespace vk
 		if (auto device_memory = memory->get_vk_device_memory();
 			device_memory != VK_NULL_HANDLE)
 		{
-			vkBindBufferMemory(dev, value, device_memory, memory->get_vk_device_memory_offset());
+			const auto result = vkBindBufferMemory(dev, value, device_memory, memory->get_vk_device_memory_offset());
+			if (result != VK_SUCCESS)
+			{
+				vkDestroyBuffer(m_device, value, nullptr);
+				value = VK_NULL_HANDLE;
+				memory.reset();
+			}
+			CHECK_RESULT(result);
 			return;
 		}
 
 		ensure(nullable);
 		vkDestroyBuffer(m_device, value, nullptr);
 		value = VK_NULL_HANDLE;
+		}
+		catch (...)
+		{
+			if (value) vkDestroyBuffer(m_device, value, nullptr);
+			value = VK_NULL_HANDLE;
+			memory.reset();
+			throw;
+		}
 	}
 
 	buffer::buffer(const vk::render_device& dev, VkBufferUsageFlags usage, void* host_pointer, u64 size)
@@ -110,6 +127,8 @@ namespace vk
 
 		info.pNext = &ex_info;
 		CHECK_RESULT(vkCreateBuffer(m_device, &info, nullptr, &value));
+		try
+		{
 
 		auto& memory_map = dev.get_memory_mapping();
 		ensure(_vkGetMemoryHostPointerPropertiesEXT);
@@ -139,7 +158,22 @@ namespace vk
 		}
 
 		memory = std::make_unique<memory_block_host>(m_device, host_pointer, size, allocation_type_info);
-		CHECK_RESULT(vkBindBufferMemory(dev, value, memory->get_vk_device_memory(), memory->get_vk_device_memory_offset()));
+		const auto result = vkBindBufferMemory(dev, value, memory->get_vk_device_memory(), memory->get_vk_device_memory_offset());
+		if (result != VK_SUCCESS)
+		{
+			vkDestroyBuffer(m_device, value, nullptr);
+			value = VK_NULL_HANDLE;
+			memory.reset();
+		}
+		CHECK_RESULT(result);
+		}
+		catch (...)
+		{
+			if (value) vkDestroyBuffer(m_device, value, nullptr);
+			value = VK_NULL_HANDLE;
+			memory.reset();
+			throw;
+		}
 	}
 
 	buffer::~buffer()

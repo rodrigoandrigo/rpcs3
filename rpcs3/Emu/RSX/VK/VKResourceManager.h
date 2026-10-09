@@ -79,10 +79,14 @@ namespace vk
 			flush();
 
 			// Run the on-exit callbacks
-			for (const auto& callback : m_exit_handlers)
+			auto exit_handlers = std::move(m_exit_handlers);
+			m_exit_handlers.clear();
+			for (const auto& callback : exit_handlers)
 			{
 				callback();
 			}
+			// Exit handlers may defer GPU resources into the collector again.
+			flush();
 		}
 
 		void flush()

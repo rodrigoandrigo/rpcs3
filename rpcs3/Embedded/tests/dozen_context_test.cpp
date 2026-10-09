@@ -196,7 +196,7 @@ int main(int argc, char** argv)
             VkQueue queue{};
             vkGetDeviceQueue(device, family, 0, &queue);
             VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            bufferInfo.size = 256; bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            bufferInfo.size = 320; bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
             VkBuffer buffer{};
             check(vkCreateBuffer(device, &bufferInfo, nullptr, &buffer));
             VkMemoryRequirements requirements{};
@@ -213,6 +213,20 @@ int main(int argc, char** argv)
             VkDeviceMemory allocation{};
             check(vkAllocateMemory(device, &allocate, nullptr, &allocation));
             check(vkBindBufferMemory(device, buffer, allocation, 0));
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+            VkPhysicalDeviceMemoryProperties2 budgetProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+            budgetProperties.pNext = &budget;
+            vkGetPhysicalDeviceMemoryProperties2(gpu, &budgetProperties);
+            const auto uploadHeap = memory.memoryTypes[type].heapIndex;
+            if (!budget.heapBudget[uploadHeap] || budget.heapUsage[uploadHeap] < requirements.size)
+                throw std::runtime_error("DZN memory budget does not account for the live upload allocation");
+            std::printf("PASS: live heap budget usage=%llu budget=%llu\n",
+                static_cast<unsigned long long>(budget.heapUsage[uploadHeap]),
+                static_cast<unsigned long long>(budget.heapBudget[uploadHeap]));
+            void* upload{};
+            check(vkMapMemory(device, allocation, 0, 320, 0, &upload));
+            for (unsigned i = 64; i < 80; ++i) static_cast<uint32_t*>(upload)[i] = 0xff004080u;
+            vkUnmapMemory(device, allocation);
             VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             imageInfo.imageType = VK_IMAGE_TYPE_2D; imageInfo.format = VK_FORMAT_B8G8R8A8_UNORM;
             imageInfo.extent = {4, 4, 1}; imageInfo.mipLevels = 1; imageInfo.arrayLayers = 1;
@@ -280,8 +294,16 @@ int main(int argc, char** argv)
             imageBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 0, 0, nullptr, 0, nullptr, 1, &imageBarrier);
-            VkClearColorValue color{}; color.float32[1] = .25f; color.float32[2] = .5f; color.float32[3] = 1.f;
-            vkCmdClearColorImage(command, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &imageBarrier.subresourceRange);
+            VkMemoryBarrier uploadBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            uploadBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+            uploadBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0, 1, &uploadBarrier, 0, nullptr, 0, nullptr);
+            VkBufferImageCopy uploadRegion{};
+            uploadRegion.bufferOffset = 256;
+            uploadRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            uploadRegion.imageExtent = {4, 4, 1};
+            vkCmdCopyBufferToImage(command, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &uploadRegion);
             imageBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             imageBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             imageBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; imageBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -344,7 +366,7 @@ int main(int argc, char** argv)
             vkDestroyDevice(device, nullptr);
             vkDestroyInstance(instance, nullptr);
         }
-        std::puts("PASS: Vulkan 1.2 -> DZN -> D3D12 PSO, BGRA readback and restart");
+        std::puts("PASS: Vulkan 1.2 -> DZN -> D3D12 PSO, staged BGRA upload/readback and restart");
         return 0;
     }
     catch (const std::exception& error) { std::puts(error.what()); return 1; }

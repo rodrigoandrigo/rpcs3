@@ -186,10 +186,12 @@ int main(int argc, char** argv)
             check(set("Video/Renderer", "Vulkan (Mesa Dozen D3D12)") == 0, "select Mesa Dozen Vulkan");
             snapshot();
             check(entries.at("Video/Renderer").value == "Vulkan (Mesa Dozen D3D12)", "Vulkan selection survives normalization");
-            check(entries.at("Video/Shader Mode").value == "Legacy Recompiler (single-threaded)", "Dozen waits for complete compiled draws");
-            check(entries.at("Video/Shader Mode").flags & RPCS3_CORE_CONFIG_READ_ONLY, "Dozen incomplete shader fallbacks locked");
-            check(set("Video/Shader Mode", "Async Recompiler with Shader Interpreter") == RPCS3_CORE_UNSUPPORTED_RENDERER,
-                "reject unsupported Dozen interpreter fallback");
+            check(!(entries.at("Video/Shader Mode").flags & RPCS3_CORE_CONFIG_READ_ONLY), "Dozen shader mode is editable");
+            check(set("Video/Shader Mode", "Async Recompiler with Shader Interpreter") == RPCS3_CORE_OK,
+                "Dozen accepts selected shader mode");
+            snapshot();
+            check(entries.at("Video/Shader Mode").value == "Async Recompiler with Shader Interpreter",
+                "Dozen preserves shader mode instead of forcing synchronous recompilation");
             check(!(entries.at("Video/Vulkan/Adapter").flags & RPCS3_CORE_CONFIG_READ_ONLY), "Vulkan adapter configuration available");
         }
         check(set("Video/Renderer", "Direct3D 12") == 0, "restore D3D12");

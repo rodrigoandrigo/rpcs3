@@ -5,6 +5,7 @@
 #endif
 
 #include <imgui.h>
+#include <windows.ui.xaml.media.dxinterop.h>
 
 #include <winrt/Windows.ApplicationModel.Activation.h>
 #include <winrt/Windows.ApplicationModel.Core.h>
@@ -15,8 +16,10 @@
 #include <winrt/Windows.Graphics.Display.h>
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.System.Profile.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Input.h>
+#include <winrt/Windows.UI.Xaml.Controls.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -26,10 +29,12 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -45,6 +50,7 @@ namespace GamingInput = winrt::Windows::Gaming::Input;
 namespace Storage = winrt::Windows::Storage;
 namespace System = winrt::Windows::System;
 namespace UI = winrt::Windows::UI::Core;
+namespace Xaml = winrt::Windows::UI::Xaml;
 
 constexpr ImWchar kFrontendGlyphRanges[] = {
 	0x0020, 0x036F,
@@ -193,54 +199,65 @@ std::vector<InputCaptureSample> ReadSampleInputDevices()
 class App : public winrt::implements<App, Core::IFrameworkView>
 {
 public:
+	~App() noexcept
+	{
+		try { Shutdown(); }
+		catch (...) { WriteFailure("Frontend cleanup failed"); }
+	}
+
+	template <typename T> void TrackEvent(T&& subscription)
+	{
+		m_eventSubscriptions.push_back(std::make_shared<std::decay_t<T>>(std::move(subscription)));
+	}
+
 	void Initialize(const Core::CoreApplicationView& view)
 	{
-		view.Activated({ this, &App::OnActivated });
-		Core::CoreApplication::Suspending({ this, &App::OnSuspending });
-		Core::CoreApplication::Resuming({ this, &App::OnResuming });
+		TrackEvent(view.Activated(winrt::auto_revoke, { this, &App::OnActivated }));
+		TrackEvent(Core::CoreApplication::Suspending(winrt::auto_revoke, { this, &App::OnSuspending }));
+		TrackEvent(Core::CoreApplication::Resuming(winrt::auto_revoke, { this, &App::OnResuming }));
 	}
 
 	void SetWindow(const UI::CoreWindow& window)
 	{
 		m_window = window;
 		m_display = Display::DisplayInformation::GetForCurrentView();
-		m_display.DpiChanged([this](auto&&, auto&&) { ResizeForWindow(); });
-		window.SizeChanged([this](auto&&, auto&&) { ResizeForWindow(); });
-		window.VisibilityChanged([this](auto&&,
+		TrackEvent(m_display.DpiChanged(winrt::auto_revoke, [this](auto&&, auto&&) { ResizeForWindow(); }));
+		TrackEvent(window.SizeChanged(winrt::auto_revoke, [this](auto&&, auto&&) { ResizeForWindow(); }));
+		TrackEvent(window.VisibilityChanged(winrt::auto_revoke, [this](auto&&,
 			const UI::VisibilityChangedEventArgs& args) {
 			m_visible = args.Visible();
-		});
-		window.Closed([this](auto&&, auto&&) { m_closed = true; });
-		UI::SystemNavigationManager::GetForCurrentView().BackRequested(
+		}));
+		TrackEvent(window.Closed(winrt::auto_revoke, [this](auto&&, auto&&) { m_closed = true; }));
+		TrackEvent(UI::SystemNavigationManager::GetForCurrentView().BackRequested(winrt::auto_revoke,
 			[this](auto&&, const UI::BackRequestedEventArgs& args) {
 				args.Handled(true);
 				m_systemBackRequested = true;
-			});
-		window.KeyDown([this](auto&&, const UI::KeyEventArgs& args) {
+			}));
+		TrackEvent(window.KeyDown(winrt::auto_revoke, [this](auto&&, const UI::KeyEventArgs& args) {
 			m_keys.insert(static_cast<int>(args.VirtualKey()));
-		});
-		window.KeyUp([this](auto&&, const UI::KeyEventArgs& args) {
+		}));
+		TrackEvent(window.KeyUp(winrt::auto_revoke, [this](auto&&, const UI::KeyEventArgs& args) {
 			m_keys.erase(static_cast<int>(args.VirtualKey()));
-		});
-		window.PointerMoved([this](auto&&, const UI::PointerEventArgs& args) {
+		}));
+		TrackEvent(window.PointerMoved(winrt::auto_revoke, [this](auto&&, const UI::PointerEventArgs& args) {
 			UpdatePointer(args);
-		});
-		window.PointerPressed([this](auto&&, const UI::PointerEventArgs& args) {
+		}));
+		TrackEvent(window.PointerPressed(winrt::auto_revoke, [this](auto&&, const UI::PointerEventArgs& args) {
 			UpdatePointer(args);
-		});
-		window.PointerReleased([this](auto&&, const UI::PointerEventArgs& args) {
+		}));
+		TrackEvent(window.PointerReleased(winrt::auto_revoke, [this](auto&&, const UI::PointerEventArgs& args) {
 			UpdatePointer(args);
-		});
-		window.PointerWheelChanged([this](auto&&,
+		}));
+		TrackEvent(window.PointerWheelChanged(winrt::auto_revoke, [this](auto&&,
 			const UI::PointerEventArgs& args) {
 			UpdatePointer(args);
 			m_mouseWheel += static_cast<float>(
 				args.CurrentPoint().Properties().MouseWheelDelta()) / 120.0f;
-		});
-		window.PointerExited([this](auto&&, auto&&) {
+		}));
+		TrackEvent(window.PointerExited(winrt::auto_revoke, [this](auto&&, auto&&) {
 			m_pointer.reset();
 			m_pointerPressed = false;
-		});
+		}));
 	}
 
 	// Called by the XAML shell before Run(). The renderer then creates a
@@ -343,10 +360,12 @@ public:
 				}};
 			if (rpcs3_core_set_callbacks(&callbacks) != RPCS3_CORE_OK)
 				throw std::runtime_error("RPCS3 callback registration failed");
+			m_coreRegistered = true;
 			const auto stateRoot = (m_frontend.Host().StateRoot() / "rpcs3").u8string();
 			std::filesystem::create_directories(m_frontend.Host().StateRoot() / "rpcs3");
 			if (rpcs3_core_initialize(reinterpret_cast<const char*>(stateRoot.c_str())) != RPCS3_CORE_OK)
 				throw std::runtime_error("RPCS3 core initialization failed");
+			m_coreInitRequested = true;
 #endif
 			m_initialized = true;
 			m_lastFrame = std::chrono::steady_clock::now();
@@ -408,6 +427,22 @@ public:
 		{
 			WriteFailure(error.what());
 		}
+#ifdef RPCS3_HOST_WITH_CORE
+		// Do not destroy callback userdata or presentation resources while the
+		// core's asynchronous shutdown still owns them, including render errors.
+		if (m_coreInitRequested && !m_coreReleased)
+		{
+			while (!m_coreReleased)
+			{
+				(void)rpcs3_core_pump();
+				if (!m_coreShutdownRequested)
+					m_coreShutdownRequested = rpcs3_core_shutdown() == RPCS3_CORE_OK;
+				if (m_coreShutdownComplete)
+					m_coreReleased = rpcs3_core_release() == RPCS3_CORE_OK;
+				if (!m_coreReleased) Sleep(16);
+			}
+		}
+#endif
 		Shutdown();
 	}
 
@@ -584,6 +619,9 @@ private:
 		presentation.controllerStatus =
 			GamingInput::Gamepad::Gamepads().Size() > 0 ? "1 pad" : "No pad";
 		const bool gameRunning = m_frontend.Host().GetRunningContent().running;
+		if (m_wasGameRunning && !gameRunning) m_renderer.ReleaseCoreFrames();
+		m_wasGameRunning = gameRunning;
+		UpdateGameCursor(gameRunning);
 		const bool stopPressed = KeyDown(System::VirtualKey::Escape) || (input.menu && input.view);
 		static bool previousStopPressed = false;
 		if (gameRunning && stopPressed && !previousStopPressed)
@@ -610,8 +648,82 @@ private:
 		m_renderer.EndFrame();
 	}
 
+	void UpdateGameCursor(bool running)
+	{
+		static const bool xbox = System::Profile::AnalyticsInfo::VersionInfo().DeviceFamily() == L"Windows.Xbox";
+		if (!xbox || !m_window || running == m_gameCursorHidden)
+			return;
+		m_gameCursorHidden = running;
+		// XAML rendering runs off the UI thread. Capture only WinRT objects,
+		// not App, so a queued restoration remains safe during shutdown.
+		auto window = m_window;
+		auto update = [window, running, state = m_cursorState]()
+		{
+			// CoreWindow.PointerCursor does not control Xbox's emulated
+			// gamepad pointer. XAML evaluates RequiresPointer on page focus.
+			// Keep the same SwapChainPanel (and its GPU resources) while moving
+			// its content between a pointer-enabled and a pointer-free page.
+			auto xamlWindow = Xaml::Window::Current();
+			if (running)
+			{
+				if (!state->hidden) state->cursor = window.PointerCursor();
+				if (xamlWindow && !state->gamePage)
+				{
+					state->interfacePage = xamlWindow.Content().try_as<Xaml::Controls::Page>();
+					if (state->interfacePage)
+					{
+						state->gamePage = Xaml::Controls::Page();
+						state->gamePage.RequiresPointer(Xaml::Controls::RequiresPointer::Never);
+						state->gamePage.IsTabStop(true);
+						state->gamePage.UseSystemFocusVisuals(false);
+						auto content = state->interfacePage.Content();
+						state->interfacePage.Content(nullptr);
+						state->gamePage.Content(content);
+						xamlWindow.Content(state->gamePage);
+						state->gamePage.Focus(Xaml::FocusState::Programmatic);
+					}
+				}
+				window.PointerCursor(nullptr);
+			}
+			else if (state->hidden)
+			{
+				if (xamlWindow && state->gamePage && state->interfacePage)
+				{
+					auto content = state->gamePage.Content();
+					state->gamePage.Content(nullptr);
+					state->interfacePage.Content(content);
+					xamlWindow.Content(state->interfacePage);
+					state->interfacePage.Focus(Xaml::FocusState::Programmatic);
+					state->gamePage = nullptr;
+					state->interfacePage = nullptr;
+				}
+				window.PointerCursor(state->cursor);
+			}
+			state->hidden = running;
+		};
+		if (window.Dispatcher().HasThreadAccess()) update();
+		else window.Dispatcher().RunAsync(UI::CoreDispatcherPriority::Normal, update);
+	}
+
 	void Shutdown()
 	{
+		if (m_window && !m_window.Dispatcher().HasThreadAccess() && !m_eventSubscriptions.empty())
+		{
+			// CoreWindow event revocation belongs to the XAML thread too.
+			m_window.Dispatcher().RunAsync(UI::CoreDispatcherPriority::Normal,
+				[subscriptions = std::move(m_eventSubscriptions)]() mutable { subscriptions.clear(); });
+		}
+		else m_eventSubscriptions.clear();
+		UpdateGameCursor(false);
+#ifdef RPCS3_HOST_WITH_CORE
+		if (m_coreRegistered && !m_coreInitRequested && !m_coreReleased)
+		{
+			int32_t result;
+			do { result = rpcs3_core_release(); if (result == RPCS3_CORE_BUSY) Sleep(1); }
+			while (result == RPCS3_CORE_BUSY);
+			m_coreReleased = result == RPCS3_CORE_OK;
+		}
+#endif
 		if (m_initialized)
 		{
 #ifdef RPCS3_HOST_WITH_CORE
@@ -622,6 +734,20 @@ private:
 			m_initialized = false;
 		}
 		m_renderer.Shutdown();
+		if (m_xamlHosted && m_swapChainPanel)
+		{
+			// Renderer shutdown runs on the worker. Detaching the composition
+			// swap chain on that thread fails and leaves the panel retaining it.
+			auto detach = [panel = m_swapChainPanel]()
+			{
+				Microsoft::WRL::ComPtr<ISwapChainPanelNative> native;
+				if (SUCCEEDED(panel->QueryInterface(IID_PPV_ARGS(native.GetAddressOf()))))
+					if (FAILED(native->SetSwapChain(nullptr))) WriteFailure("SwapChainPanel detach failed");
+			};
+			if (m_window.Dispatcher().HasThreadAccess()) detach();
+			else m_window.Dispatcher().RunAsync(UI::CoreDispatcherPriority::Normal, detach);
+			m_swapChainPanel = nullptr;
+		}
 		if (ImGui::GetCurrentContext())
 			ImGui::DestroyContext();
 	}
@@ -648,6 +774,17 @@ private:
 	}
 
 	UI::CoreWindow m_window{ nullptr };
+	std::vector<std::shared_ptr<void>> m_eventSubscriptions;
+	struct CursorState
+	{
+		UI::CoreCursor cursor{ nullptr };
+		Xaml::Controls::Page interfacePage{ nullptr };
+		Xaml::Controls::Page gamePage{ nullptr };
+		bool hidden = false;
+	};
+	std::shared_ptr<CursorState> m_cursorState = std::make_shared<CursorState>();
+	bool m_gameCursorHidden = false;
+	bool m_wasGameRunning = false;
 	Microsoft::WRL::ComPtr<IUnknown> m_swapChainPanel;
 	Display::DisplayInformation m_display{ nullptr };
 	D3D12Renderer m_renderer;
@@ -677,6 +814,8 @@ private:
 	bool m_coreShutdownRequested = false;
 	bool m_coreReady = false;
 	bool m_coreGraphicsChecked = false;
+	bool m_coreInitRequested = false;
+	bool m_coreRegistered = false;
 	bool m_coreShutdownComplete = false;
 	bool m_coreReleased = false;
 	int32_t m_coreShutdownResult = RPCS3_CORE_OK;

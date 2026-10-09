@@ -17,6 +17,9 @@ XamlApp::XamlApp()
 		Windows::UI::ViewManagement::ApplicationViewScaling::TrySetDisableLayoutScaling(true);
 	}
 	InitializeComponent();
+	// The Xbox gamepad pointer must be requested by the frontend page, not
+	// inherited automatically by fullscreen gameplay pages.
+	RequiresPointerMode = ApplicationRequiresPointerMode::WhenRequested;
 }
 
 void XamlApp::OnLaunched(LaunchActivatedEventArgs^)

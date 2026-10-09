@@ -27,6 +27,7 @@ private:
 	DestroyRuntime m_destroy = nullptr;
 	ResizeRuntime m_resize = nullptr;
 	void* m_runtime = nullptr;
+	bool m_finished = false;
 	Windows::Foundation::IAsyncAction^ m_worker;
 };
 }

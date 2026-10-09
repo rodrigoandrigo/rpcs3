@@ -10,22 +10,27 @@ namespace UwpImGuiFrontend
 XamlPage::XamlPage()
 {
 	InitializeComponent();
-	Loaded += ref new Windows::UI::Xaml::RoutedEventHandler(this, &XamlPage::OnLoaded);
+	Platform::WeakReference weak(this);
+	Loaded += ref new Windows::UI::Xaml::RoutedEventHandler(
+		[weak](Platform::Object^ sender, Windows::UI::Xaml::RoutedEventArgs^ args)
+		{ if (auto page = weak.Resolve<XamlPage>()) page->OnLoaded(sender, args); });
 	FrontendPanel->SizeChanged += ref new Windows::UI::Xaml::SizeChangedEventHandler(
-		[this](Platform::Object^, Windows::UI::Xaml::SizeChangedEventArgs^) { UpdatePanelSize(); });
+		[weak](Platform::Object^, Windows::UI::Xaml::SizeChangedEventArgs^)
+		{ if (auto page = weak.Resolve<XamlPage>()) page->UpdatePanelSize(); });
 	FrontendPanel->CompositionScaleChanged += ref new Windows::Foundation::TypedEventHandler<
 		Windows::UI::Xaml::Controls::SwapChainPanel^, Platform::Object^>(
-		[this](Windows::UI::Xaml::Controls::SwapChainPanel^, Platform::Object^) { UpdatePanelSize(); });
+		[weak](Windows::UI::Xaml::Controls::SwapChainPanel^, Platform::Object^)
+		{ if (auto page = weak.Resolve<XamlPage>()) page->UpdatePanelSize(); });
 }
 
 void XamlPage::OnLoaded(Platform::Object^, Windows::UI::Xaml::RoutedEventArgs^)
 {
-	if (m_runtime)
+	if (m_runtime || m_finished)
 		return;
 	try
 	{
 		StatusText->Text = "Loading RPCS3 runtime...";
-		m_runtimeModule = LoadPackagedLibrary(L"RPCS3FrontendRuntime.dll", 0);
+		if (!m_runtimeModule) m_runtimeModule = LoadPackagedLibrary(L"RPCS3FrontendRuntime.dll", 0);
 		if (!m_runtimeModule)
 		{
 			StatusText->Text = "RPCS3 runtime could not be loaded.";
@@ -61,7 +66,23 @@ void XamlPage::OnLoaded(Platform::Object^, Windows::UI::Xaml::RoutedEventArgs^)
 			{
 				m_run(m_runtime);
 			}));
+		m_worker->Completed = ref new Windows::Foundation::AsyncActionCompletedHandler(
+			[this](Windows::Foundation::IAsyncAction^, Windows::Foundation::AsyncStatus)
+			{
+				Dispatcher->RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,
+					ref new Windows::UI::Core::DispatchedHandler([this]()
+					{
+						m_finished = true;
+						auto runtime = m_runtime;
+						m_runtime = nullptr;
+						m_worker = nullptr;
+						// Run has joined/released the core before returning. Destroy
+						// the host only now, on the XAML thread, never while rendering.
+						if (runtime && m_destroy) m_destroy(runtime);
+					}));
+			});
 		StatusOverlay->Visibility = Windows::UI::Xaml::Visibility::Collapsed;
+		Focus(Windows::UI::Xaml::FocusState::Programmatic);
 	}
 	catch (Platform::Exception^ error)
 	{

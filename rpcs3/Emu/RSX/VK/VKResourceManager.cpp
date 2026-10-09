@@ -234,6 +234,7 @@ namespace vk
 			const auto local_memory_usage = vmm_get_application_memory_usage_impl(mem_info.device_local);
 
 			constexpr u64 _1M = 0x100000;
+#ifndef RPCS3_UWP_DZN
 			const auto res_scale = rsx::get_current_renderer()->resolution_scaling_config.scale_factor();
 			const auto mem_threshold_1 = static_cast<u64>(256 * res_scale * res_scale) * _1M;
 			const auto mem_threshold_2 = static_cast<u64>(64 * res_scale * res_scale) * _1M;
@@ -250,6 +251,9 @@ namespace vk
 				load_severity = rsx::problem_severity::moderate;
 			}
 
+#endif
+			// Dozen reports an OS/process budget, not total physical VRAM.
+			// Physical heap headroom must not override budget pressure on Xbox.
 			if (load_severity >= rsx::problem_severity::moderate)
 			{
 				// NOTE: For some reason fmt::format with a sized float followed by percentage sign causes random crashing.

@@ -1630,6 +1630,37 @@ namespace vk
 			return nullptr;
 		}
 
+#ifdef RPCS3_UWP_DZN
+		// Use a buffer upload, not a CPU-visible row-major D3D12 texture.
+		auto image = std::make_unique<vk::viewable_image>(*m_device, m_memory_types.device_local,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_TYPE_2D, format,
+			width, height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			0, VMM_ALLOCATION_POOL_SWAPCHAIN);
+		auto staging = std::make_unique<vk::buffer>(*m_device, u64(width) * height * 4,
+			m_memory_types.host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0, VMM_ALLOCATION_POOL_SWAPCHAIN);
+		auto* dst = static_cast<u32*>(staging->map(0, VK_WHOLE_SIZE));
+		auto* src = vm::_ptr<const char>(address);
+		for (u32 row = 0; row < height; ++row)
+		{
+			auto* pixels = reinterpret_cast<const be_t<u32>*>(src);
+			for (u32 col = 0; col < width; ++col) dst[col] = pixels[col];
+			src += pitch;
+			dst += width;
+		}
+		staging->unmap();
+		image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		VkBufferImageCopy region{};
+		region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+		region.imageExtent = {width, height, 1};
+		vkCmdCopyBufferToImage(cmd, staging->value, image->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+		image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+		auto* result = image.get();
+		vk::get_resource_manager()->dispose(staging);
+		vk::get_resource_manager()->dispose(image);
+		return result;
+#else
 		if (!linear_format_supported)
 		{
 			return nullptr;
@@ -1677,6 +1708,8 @@ namespace vk
 		vk::get_resource_manager()->dispose(image);
 
 		return result;
+
+#endif
 	}
 
 	bool texture_cache::blit(const rsx::blit_src_info& src, const rsx::blit_dst_info& dst, bool interpolate, vk::surface_cache& m_rtts, vk::command_buffer& cmd)

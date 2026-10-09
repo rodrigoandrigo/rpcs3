@@ -136,7 +136,13 @@ void D3D12Renderer::Shutdown()
 {
 	if (!m_device)
 		return;
-	WaitForGpu();
+	// A removed device has no outstanding work to wait for. Still release all
+	// COM objects and the fence event instead of abandoning cleanup.
+	if (SUCCEEDED(m_device->GetDeviceRemovedReason()))
+	{
+		try { WaitForGpu(); }
+		catch (...) { if (SUCCEEDED(m_device->GetDeviceRemovedReason())) throw; }
+	}
 	m_textures.clear();
 	if (m_imguiBackendInitialized)
 	{
@@ -159,6 +165,9 @@ void D3D12Renderer::Shutdown()
 	m_rtvHeap.Reset();
 	m_queue.Reset();
 	m_fence.Reset();
+	for (auto& frame : m_frames) frame.allocator.Reset();
+	m_freeDescriptors.clear();
+	for (auto& frame : m_frames) frame.coreDescriptor = 0;
 	m_device.Reset();
 	m_factory.Reset();
 	if (m_fenceEvent)
@@ -370,6 +379,12 @@ TextureHandle D3D12Renderer::ImportCoreFrame(ID3D12Resource* resource)
 		static_cast<std::uint32_t>(desc.Width), desc.Height};
 }
 
+void D3D12Renderer::ReleaseCoreFrames()
+{
+	if (m_device && SUCCEEDED(m_device->GetDeviceRemovedReason())) WaitForGpu();
+	for (auto& frame : m_frames) frame.coreFrame.Reset();
+}
+
 void D3D12Renderer::EndFrame()
 {
 	ImGui::Render();
@@ -402,12 +417,18 @@ void D3D12Renderer::EndFrame()
 
 void D3D12Renderer::WaitForFence(std::uint64_t value)
 {
+	Check(m_device->GetDeviceRemovedReason(), "GPU device removed before fence wait");
 	if (value == 0 || m_fence->GetCompletedValue() >= value)
 		return;
 	Check(m_fence->SetEventOnCompletion(value, m_fenceEvent),
 		"Set fence event");
-	if (WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE) != WAIT_OBJECT_0)
-		throw std::runtime_error("Wait for GPU fence failed");
+	for (;;)
+	{
+		const auto result = WaitForSingleObjectEx(m_fenceEvent, 100, FALSE);
+		Check(m_device->GetDeviceRemovedReason(), "GPU device removed during fence wait");
+		if (result == WAIT_OBJECT_0) break;
+		if (result != WAIT_TIMEOUT) throw std::runtime_error("Wait for GPU fence failed");
+	}
 }
 
 void D3D12Renderer::WaitForGpu()
@@ -562,7 +583,7 @@ void D3D12Renderer::ReleaseTexture(TextureHandle texture)
 	const auto found = m_textures.find(texture.id);
 	if (found == m_textures.end())
 		return;
-	WaitForGpu();
+	if (m_device && SUCCEEDED(m_device->GetDeviceRemovedReason())) WaitForGpu();
 	FreeDescriptor(found->second.descriptorIndex);
 	m_textures.erase(found);
 }

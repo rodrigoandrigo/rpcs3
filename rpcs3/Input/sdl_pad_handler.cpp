@@ -5,6 +5,35 @@
 #include "sdl_instance.h"
 #include "Emu/system_utils.hpp"
 #include "Emu/system_config.h"
+#ifdef RPCS3_UWP
+#include <winrt/Windows.Gaming.Input.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.System.Profile.h>
+#include <roapi.h>
+namespace
+{
+winrt::Windows::Gaming::Input::Gamepad uwp_gamepad(int slot)
+{
+	struct apartment
+	{
+		HRESULT result = RoInitialize(RO_INIT_MULTITHREADED);
+		~apartment() { if (SUCCEEDED(result)) RoUninitialize(); }
+	};
+	thread_local apartment scope;
+	if (FAILED(scope.result) && scope.result != RPC_E_CHANGED_MODE) winrt::check_hresult(scope.result);
+	auto pads = winrt::Windows::Gaming::Input::Gamepad::Gamepads();
+	return slot >= 0 && static_cast<unsigned>(slot) < pads.Size() ? pads.GetAt(slot) : nullptr;
+}
+bool uwp_is_xbox()
+{
+	static const bool xbox = [] {
+		try { (void)uwp_gamepad(-1); return winrt::Windows::System::Profile::AnalyticsInfo::VersionInfo().DeviceFamily() == L"Windows.Xbox"; }
+		catch (const winrt::hresult_error&) { return false; }
+	}();
+	return xbox;
+}
+}
+#endif
 
 LOG_CHANNEL(sdl_log, "SDL");
 
@@ -164,9 +193,24 @@ bool sdl_pad_handler::Init()
 {
 	if (m_is_init)
 		return true;
+#ifdef RPCS3_UWP
+	if (uwp_is_xbox())
+	{
+		m_is_init = true;
+		return true;
+	}
+#endif
 
 	if (!sdl_instance::get_instance().initialize())
+	{
+#ifdef RPCS3_UWP
+		// Xbox Gamepad does not require SDL's RawGameController backend.
+		m_is_init = true;
+		return true;
+#else
 		return false;
+#endif
+	}
 
 	if (g_cfg.io.load_sdl_mappings)
 	{
@@ -487,6 +531,13 @@ PadHandlerBase::connection sdl_pad_handler::update_connection(const std::shared_
 	{
 #ifdef RPCS3_UWP
 		if (dev->uwp_slot >= 0) {
+			if (uwp_is_xbox())
+			{
+				try { dev->uwp_direct = !!uwp_gamepad(dev->uwp_slot); }
+				catch (const winrt::hresult_error&) { dev->uwp_direct = false; }
+				dev->sdl.has_rumble = dev->uwp_direct;
+				return dev->uwp_direct ? connection::connected : connection::disconnected;
+			}
 			if (dev->sdl.gamepad && SDL_GamepadConnected(dev->sdl.gamepad))
 				return connection::connected; // WGI snapshots need no desktop event queue.
 			if (dev->sdl.gamepad) { SDL_CloseGamepad(dev->sdl.gamepad); dev->sdl.gamepad = nullptr; }
@@ -497,7 +548,14 @@ PadHandlerBase::connection sdl_pad_handler::update_connection(const std::shared_
 				if (info.gamepad) dev->sdl = std::move(info);
 			}
 			SDL_free(pads);
-			return dev->sdl.gamepad ? connection::connected : connection::disconnected;
+			if (dev->sdl.gamepad) { dev->uwp_direct = false; return connection::connected; }
+			try
+			{
+				dev->uwp_direct = !!uwp_gamepad(dev->uwp_slot);
+				dev->sdl.has_rumble = dev->uwp_direct;
+				return dev->uwp_direct ? connection::connected : connection::disconnected;
+			}
+			catch (const winrt::hresult_error&) { dev->uwp_direct = false; return connection::disconnected; }
 		}
 #endif
 		if (dev->sdl.gamepad)
@@ -869,6 +927,18 @@ void sdl_pad_handler::apply_pad_data(const pad_ensemble& binding)
 
 void sdl_pad_handler::set_rumble(SDLDevice* dev, u8 speed_large, u8 speed_small)
 {
+#ifdef RPCS3_UWP
+	if (dev && dev->uwp_direct)
+	{
+		try { if (auto pad = uwp_gamepad(dev->uwp_slot)) {
+			winrt::Windows::Gaming::Input::GamepadVibration vibration{};
+			vibration.LeftMotor = speed_large / 255.0;
+			vibration.RightMotor = speed_small / 255.0;
+			pad.Vibration(vibration);
+		} } catch (const winrt::hresult_error&) {}
+		return;
+	}
+#endif
 	if (!dev || !dev->sdl.gamepad) return;
 
 	constexpr u32 rumble_duration_ms = static_cast<u32>((min_output_interval + 100ms).count()); // Some number higher than the min_output_interval.
@@ -950,6 +1020,34 @@ std::unordered_map<u32, u16> sdl_pad_handler::get_button_values(const std::share
 {
 	std::unordered_map<u32, u16> values;
 	SDLDevice* dev = static_cast<SDLDevice*>(device.get());
+	#ifdef RPCS3_UWP
+	if (dev && dev->uwp_direct)
+	{
+		try
+		{
+			auto pad = uwp_gamepad(dev->uwp_slot);
+			if (!pad) return values;
+			const auto reading = pad.GetCurrentReading();
+			using B = winrt::Windows::Gaming::Input::GamepadButtons;
+			const auto button = [&](u32 key, B mask) { values[key] = (reading.Buttons & mask) != B::None ? 255 : 0; };
+			button(South, B::A); button(East, B::B); button(West, B::X); button(North, B::Y);
+			button(Up, B::DPadUp); button(Down, B::DPadDown); button(Left, B::DPadLeft); button(Right, B::DPadRight);
+			button(LB, B::LeftShoulder); button(RB, B::RightShoulder);
+			button(LS, B::LeftThumbstick); button(RS, B::RightThumbstick);
+			button(Start, B::Menu); button(Back, B::View);
+			const auto axis = [&](u32 negative, u32 positive, double value) {
+				values[negative] = static_cast<u16>(std::clamp(-value, 0.0, 1.0) * 32767);
+				values[positive] = static_cast<u16>(std::clamp(value, 0.0, 1.0) * 32767);
+			};
+			axis(LSXNeg, LSXPos, reading.LeftThumbstickX); axis(LSYNeg, LSYPos, reading.LeftThumbstickY);
+			axis(RSXNeg, RSXPos, reading.RightThumbstickX); axis(RSYNeg, RSYPos, reading.RightThumbstickY);
+			values[LT] = static_cast<u16>(std::clamp(reading.LeftTrigger, 0.0, 1.0) * 32767);
+			values[RT] = static_cast<u16>(std::clamp(reading.RightTrigger, 0.0, 1.0) * 32767);
+		}
+		catch (const winrt::hresult_error&) {}
+		return values;
+	}
+	#endif
 	if (!dev || !dev->sdl.gamepad)
 		return values;
 

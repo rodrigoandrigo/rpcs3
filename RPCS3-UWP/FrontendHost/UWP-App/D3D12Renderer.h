@@ -37,6 +37,7 @@ public:
 	void BeginFrame(float deltaSeconds);
 	void EndFrame();
 	void WaitForGpu();
+	void ReleaseCoreFrames();
 	[[nodiscard]] ID3D12Device* Device() const noexcept { return m_device.Get(); }
 	[[nodiscard]] ID3D12CommandQueue* Queue() const noexcept { return m_queue.Get(); }
 	// Call between BeginFrame and EndFrame. Retains the immutable core snapshot

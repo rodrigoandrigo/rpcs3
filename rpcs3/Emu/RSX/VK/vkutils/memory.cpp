@@ -446,7 +446,22 @@ namespace vk
 
 	f32 mem_allocator_vk::get_memory_usage()
 	{
+#ifdef RPCS3_UWP_DZN
+		// Zero usage disables proactive eviction for the direct Dozen allocator.
+		VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+		VkPhysicalDeviceMemoryProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+		properties.pNext = &budget;
+		vkGetPhysicalDeviceMemoryProperties2(g_render_device->gpu(), &properties);
+		f32 usage = 0.f;
+		for (u32 heap = 0; heap < properties.memoryProperties.memoryHeapCount; ++heap)
+		{
+			if (budget.heapBudget[heap])
+				usage = std::max(usage, static_cast<f32>(100. * budget.heapUsage[heap] / budget.heapBudget[heap]));
+		}
+		return usage;
+#else
 		return 0.f;
+#endif
 	}
 
 	mem_allocator_base* get_current_mem_allocator()
