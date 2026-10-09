@@ -1,0 +1,19 @@
+#version 450
+#ifndef SAMPLE_SET
+#define SAMPLE_SET 0
+#endif
+#ifdef USE_UNSIZED_UBO
+#extension GL_EXT_uniform_buffer_unsized_array : require
+layout(set = SAMPLE_SET, binding = 3, std140) uniform Constants { vec4 colors[]; } constants;
+#endif
+layout(local_size_x = 1) in;
+layout(set = SAMPLE_SET, binding = 7) uniform sampler2D source_image;
+layout(set = SAMPLE_SET, binding = 11, std430) buffer Result { uint color; } result;
+void main()
+{
+#ifdef USE_UNSIZED_UBO
+    result.color = packUnorm4x8(constants.colors[gl_WorkGroupID.x + 3]);
+#else
+    result.color = packUnorm4x8(texelFetch(source_image, ivec2(0), 0));
+#endif
+}

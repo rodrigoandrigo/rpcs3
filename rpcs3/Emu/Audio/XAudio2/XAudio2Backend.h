@@ -9,6 +9,10 @@
 #include <initguid.h>
 #include <xaudio2.h>
 #include <wrl/client.h>
+#include <atomic>
+#ifdef RPCS3_UWP
+#include "XAudio2BufferPool.h"
+#endif
 #ifndef RPCS3_UWP
 #include <MMDeviceAPI.h>
 #endif
@@ -56,6 +60,9 @@ private:
 	bool m_default_dev_changed = false;
 
 	std::vector<u8> m_data_buf{};
+#ifdef RPCS3_UWP
+	XAudio2BufferPool m_submitted_buffers;
+#endif
 	std::array<u8, sizeof(float) * static_cast<u32>(AudioChannelCnt::SURROUND_7_1)> m_last_sample{};
 
 	atomic_t<bool> m_reset_req = false;
@@ -65,7 +72,12 @@ private:
 	void OnVoiceProcessingPassEnd() noexcept override {}
 	void OnStreamEnd() noexcept override {}
 	void OnBufferStart(void* /* pBufferContext */) noexcept override {}
-	void OnBufferEnd(void* /* pBufferContext*/) noexcept override {}
+	void OnBufferEnd(void* context) noexcept override
+	{
+#ifdef RPCS3_UWP
+		XAudio2BufferPool::release(context);
+#endif
+	}
 	void OnLoopEnd(void* /* pBufferContext */) noexcept override {}
 	void OnVoiceError(void* /* pBufferContext */, HRESULT Error) noexcept override { OnCriticalError(Error); }
 

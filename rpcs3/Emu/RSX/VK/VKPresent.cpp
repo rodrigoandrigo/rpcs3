@@ -354,8 +354,14 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 			}
 		}
 	}
+#ifdef RPCS3_UWP_DZN
+	else if (auto surface = m_texture_cache.find_texture_from_dimensions<true>(info->address, info->format, info->width, info->height);
+			 surface && surface->get_rsx_pitch() == info->pitch &&
+			 (surface->get_context() & (rsx::texture_upload_context::blit_engine_dst | rsx::texture_upload_context::framebuffer_storage)))
+#else
 	else if (auto surface = m_texture_cache.find_texture_from_dimensions<true>(info->address, info->format);
 			 surface && surface->get_width() >= info->width && surface->get_height() >= info->height)
+#endif
 	{
 		// Hack - this should be the first location to check for output
 		// The render might have been done offscreen or in software and a blit used to display

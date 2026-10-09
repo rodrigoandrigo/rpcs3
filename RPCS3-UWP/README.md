@@ -6,6 +6,65 @@ The project is intended for Windows UWP/AppContainer environments and Xbox devel
 
 ## Embedded Vulkan / Mesa Dozen
 
+Version 1.0.0.73 speeds up library recognition by removing the frontend's
+duplicate EBOOT search before the authoritative core scan. Brokered directory
+enumeration now reads pages of 128 items and starts up to 16 file-property
+queries before waiting for results. Folder-property queries are omitted because
+recursive disk-size calculation uses only file sizes. Refresh still performs a
+fresh scan; game metadata, icons and exact disk sizes remain available.
+
+Version 1.0.0.72 fixes Vulkan device creation on DZN adapters that do not
+advertise `runtimeDescriptorArray` or `uniformBufferStandardLayout`. RPCS3 now
+queries both Vulkan 1.2 capabilities and enables only those reported by the
+selected physical device. This prevents `vkCreateDevice` from failing with
+`VK_ERROR_FEATURE_NOT_PRESENT` on the Xbox DZN adapter. A policy regression
+test covers unsupported, partially supported and fully supported combinations.
+The remaining startup warnings for 32-bit indices, MSAA, large points, wide
+lines and logical framebuffer operations describe DZN capability limitations;
+they are no longer followed by this unsupported device-feature request.
+
+Version 1.0.0.70 leaves the verified video fixes unchanged and improves UWP
+XAudio2 delivery. The callback requests up to one extra 10 ms quantum of real
+producer PCM, bounded by the existing 25 ms slot capacity. Extra samples are
+submitted only when available; missing lookahead is not synthesized. This
+provides scheduling headroom instead of always queuing exactly the immediate
+processing deficit. Pause stops the source voice and waits up to 50 ms for
+asynchronous flush completion before playback can resume; a timeout requests
+backend recovery. Open no longer starts a source voice before its buffers and
+producer callback are ready. Native tests cover a delayed processing quantum,
+partial buffers, ownership and three stop/flush/restart cycles. The user
+confirmed that the captured pre-backend audio is clean, while live game output
+is noisy; successful native tests do not yet confirm the in-game audio fix.
+
+Version 1.0.0.69 fixes Dozen's selection of live descriptor heaps when the
+application enables individual Vulkan 1.2 update-after-bind features without
+the aggregate descriptor-indexing feature. RPCS3 defers descriptor writes until
+submission; copying their old contents during command recording produced stale
+textures and shader constants. A native regression reproduced the failure before
+the fix and passes afterward for late texture and unsized uniform-buffer updates.
+Native GPU checks also cover BGRA readback, component remaps, blending, scissor,
+render-target preservation and device restart. The Dozen presentation fallback
+requires matching framebuffer dimensions, pitch and output usage rather than
+presenting a shader-input texture atlas.
+
+The UWP XAudio2 callback now fills processing-pass deficits even when a partly
+consumed buffer remains queued. Three separately owned buffers remain immutable
+until OnBufferEnd releases them. A silent native XAudio2 regression exercised
+this partial-buffer case without errors or slot exhaustion; buffer ownership
+also has an offline regression test. These are native tests, not confirmation
+of Bejeweled 3 gameplay, AppContainer execution or Xbox behavior. No new
+production diagnostic tracing is enabled by these fixes.
+
+Version 1.0.0.68 uses synchronous shader recompilation for embedded Dozen.
+The shader mode is read-only while Vulkan is selected. This prevents skipped
+draws and the interpreter's unsupported vertex-texture fallback during pipeline
+compilation, at the cost of first-use stalls. Existing Vulkan configurations are
+normalized automatically; other renderers keep their shader mode selection.
+This change does not establish that every game color/composition issue is fixed.
+The offline sampling probe additionally checks typed BGRA sampling and a
+non-identity RSX component remap (compile `dozen_sample.comp` with
+`glslangValidator -V` and pass its SPIR-V path to `dozen_context_test`).
+
 Version 1.0.0.67 fixes black-screen presentation caused by the frontend
 rejecting Dozen's BGRA texture format. Typed BGRA and RGBA shader-resource
 views are accepted without manually swapping color channels. Offscreen

@@ -2,6 +2,7 @@
 #include "brokered_files.h"
 #include "brokered_path.h"
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Search.h>
 #include <winrt/Windows.Storage.FileProperties.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -281,14 +282,37 @@ public:
             std::vector<fs::dir_entry> entries;
             if (m_kind == RPCS3_CORE_STORAGE_FOLDER)
             {
-                for (const auto& item : folder(names, names.size()).GetItemsAsync().get())
+                const auto root = folder(names, names.size());
+                constexpr uint32_t page_size = 128;
+                constexpr uint32_t property_batch_size = 16;
+                for (uint32_t offset = 0;; offset += page_size)
                 {
-                    fs::dir_entry entry;
-                    entry.name = winrt::to_string(item.Name());
-                    entry.is_directory = item.IsOfType(StorageItemTypes::Folder);
-                    entry.is_writable = m_writable;
-                    entry.size = item.GetBasicPropertiesAsync().get().Size();
-                    entries.push_back(std::move(entry));
+                    const auto items = root.GetItemsAsync(offset, page_size).get();
+                    for (uint32_t begin = 0; begin < items.Size(); begin += property_batch_size)
+                    {
+                        const auto end = std::min(begin + property_batch_size, items.Size());
+                        const auto base = entries.size();
+                        using properties_operation = winrt::Windows::Foundation::IAsyncOperation<
+                            winrt::Windows::Storage::FileProperties::BasicProperties>;
+                        std::vector<std::pair<std::size_t, properties_operation>> pending;
+                        pending.reserve(property_batch_size);
+                        // Launch a bounded group before waiting. Folder sizes are
+                        // unused by recursive size calculation; files retain exact sizes.
+                        for (uint32_t index = begin; index < end; ++index)
+                        {
+                            const auto item = items.GetAt(index);
+                            fs::dir_entry entry;
+                            entry.name = winrt::to_string(item.Name());
+                            entry.is_directory = item.IsOfType(StorageItemTypes::Folder);
+                            entry.is_writable = m_writable;
+                            if (!entry.is_directory)
+                                pending.emplace_back(index - begin, item.GetBasicPropertiesAsync());
+                            entries.push_back(std::move(entry));
+                        }
+                        for (auto& [index, operation] : pending)
+                            entries[base + index].size = operation.get().Size();
+                    }
+                    if (items.Size() < page_size) break;
                 }
             }
             else

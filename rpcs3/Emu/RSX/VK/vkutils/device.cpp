@@ -1,4 +1,5 @@
 #include "device.h"
+#include "Vulkan12FeaturePolicy.h"
 #include "instance.h"
 #include "util/logs.hpp"
 #include "Emu/system_config.h"
@@ -29,6 +30,7 @@ namespace vk
 
 		VkPhysicalDeviceFloat16Int8FeaturesKHR shader_support_info{};
 		VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_info{};
+		VkPhysicalDeviceUniformBufferStandardLayoutFeatures uniform_buffer_layout_info{};
 		VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT fbo_loops_info{};
 		VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR shader_barycentric_info{};
 		VkPhysicalDeviceCustomBorderColorFeaturesEXT custom_border_color_info{};
@@ -45,6 +47,10 @@ namespace vk
 		descriptor_indexing_info.pNext = features2.pNext;
 		features2.pNext                = &descriptor_indexing_info;
 		descriptor_indexing_support    = true;
+
+		uniform_buffer_layout_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFORM_BUFFER_STANDARD_LAYOUT_FEATURES;
+		uniform_buffer_layout_info.pNext = features2.pNext;
+		features2.pNext                 = &uniform_buffer_layout_info;
 
 		// Optional features
 		if (device_extensions.is_supported(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME))
@@ -117,6 +123,8 @@ namespace vk
 		features = features2.features;
 
 		descriptor_indexing_support.supported = true; // VK_API_VERSION_1_2
+		runtime_descriptor_array_support = !!descriptor_indexing_info.runtimeDescriptorArray;
+		uniform_buffer_standard_layout_support = !!uniform_buffer_layout_info.uniformBufferStandardLayout;
 #define SET_DESCRIPTOR_BITFLAG(field, bit) if (descriptor_indexing_info.field) descriptor_indexing_support.update_after_bind_mask |= (1ull << bit)
 		SET_DESCRIPTOR_BITFLAG(descriptorBindingUniformBufferUpdateAfterBind, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
 		SET_DESCRIPTOR_BITFLAG(descriptorBindingSampledImageUpdateAfterBind, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
@@ -740,8 +748,10 @@ namespace vk
 		device.pEnabledFeatures = &enabled_features;
 
 		VkPhysicalDeviceVulkan12Features vulkan12_features{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
-		vulkan12_features.runtimeDescriptorArray = VK_TRUE;
-		vulkan12_features.uniformBufferStandardLayout = VK_TRUE;
+		const auto vulkan12_policy = select_vulkan12_features(
+			pgpu->runtime_descriptor_array_support, pgpu->uniform_buffer_standard_layout_support);
+		vulkan12_features.runtimeDescriptorArray = vulkan12_policy.runtime_descriptor_array;
+		vulkan12_features.uniformBufferStandardLayout = vulkan12_policy.uniform_buffer_standard_layout;
 		vulkan12_features.pNext = const_cast<void*>(device.pNext);
 		device.pNext = &vulkan12_features;
 

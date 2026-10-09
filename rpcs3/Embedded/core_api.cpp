@@ -96,6 +96,8 @@ namespace
 		if (path.starts_with("Video/Vulkan/")) return "Vulkan is excluded from the UWP build";
 #else
 		if (path == "Video/Vulkan/Exclusive Fullscreen Mode") return "The UWP frontend owns fullscreen presentation; desktop exclusive mode is unavailable";
+		if (path == "Video/Shader Mode" && g_cfg.video.renderer == video_renderer::vulkan)
+			return "Mesa Dozen uses synchronous recompilation: the shader interpreter lacks vertex textures and asynchronous recompilation can omit draws during screen transitions";
 #endif
 		if (path.starts_with("Mounts/")) return "Storage locations require a brokered picker grant";
 		if (path.starts_with("IPC/")) return "Desktop IPC is not integrated in this host";
@@ -109,6 +111,13 @@ namespace
 
 	void normalize_host_settings()
 	{
+#ifdef RPCS3_UWP_DZN
+		// Do not present incomplete RSX frames while a new pipeline is compiling.
+		// Neither skipped draws nor the interpreter's missing vertex textures
+		// are a valid fallback for the embedded Dozen renderer.
+		if (g_cfg.video.renderer == video_renderer::vulkan)
+			g_cfg.video.shadermode.set(shader_mode::recompiler);
+#endif
 #ifdef RPCS3_UWP_DZN
 		if (g_cfg.video.renderer != video_renderer::vulkan)
 #endif
@@ -886,13 +895,23 @@ int32_t rpcs3_core_set_config(const char* path_utf8, const char* value_utf8) try
 		if (!Emu.IsStopped() && !item->get_is_dynamic()) return RPCS3_CORE_BUSY;
 		const auto type = item->get_type();
 		const auto previous = item->to_yaml();
+#ifdef RPCS3_UWP_DZN
+		const auto previous_shader_mode = g_cfg.video.shadermode.get();
+#endif
 		const bool structured = type == cfg::type::set || type == cfg::type::map ||
 			type == cfg::type::node_map || type == cfg::type::log || type == cfg::type::device;
 		if (!(structured ? item->from_yaml(value, !Emu.IsStopped()) :
 			item->from_string(value, !Emu.IsStopped()))) return RPCS3_CORE_INVALID_ARGUMENT;
+#ifdef RPCS3_UWP_DZN
+		if (g_cfg.video.renderer == video_renderer::vulkan)
+			g_cfg.video.shadermode.set(shader_mode::recompiler);
+#endif
 		if (!save_current_config())
 		{
 			(void)item->from_yaml(previous);
+#ifdef RPCS3_UWP_DZN
+			g_cfg.video.shadermode.set(previous_shader_mode);
+#endif
 			return RPCS3_CORE_IO_ERROR;
 		}
 		refresh_config_snapshot();

@@ -83,10 +83,11 @@ int main(int argc, char** argv)
     check(rpcs3_core_enumerate_games(nullptr, [](void*, const rpcs3_core_game_info*) {}, nullptr)
         == RPCS3_CORE_INVALID_ARGUMENT, "reject invalid library scan");
     if (argc == 5) {
-        struct game_result { unsigned count = 0; bool valid = false; } games;
+        struct game_result { unsigned count = 0; bool valid = false; std::map<std::string, uint64_t> sizes; } games;
         const auto collect = [](void* opaque, const rpcs3_core_game_info* info) {
             auto& result = *static_cast<game_result*>(opaque);
             ++result.count;
+            result.sizes[info->serial] = info->size_on_disk;
             if (std::string(info->serial) == "NPUB30304") result.valid =
                 std::string(info->name) != "NPUB30304" && std::string(info->category) == "HG" &&
                 info->icon_size > 8 && info->icon_data && std::string(info->firmware) != "Unknown";
@@ -95,16 +96,28 @@ int main(int argc, char** argv)
         };
         check(rpcs3_core_enumerate_games(argv[4], collect, &games) == 0 && games.valid,
             "upstream PARAM.SFO metadata and icon without booting guest");
+        const auto native_sizes = games.sizes;
+        try {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
-        const auto folder = winrt::Windows::Storage::StorageFolder::GetFolderFromPathAsync(winrt::to_hstring(argv[4])).get();
+        const auto native_folder = std::filesystem::absolute(argv[4]).make_preferred().wstring();
+        const auto folder = winrt::Windows::Storage::StorageFolder::GetFolderFromPathAsync(native_folder).get();
         char root[256]{}; uint32_t required = 0;
         const auto mounted = rpcs3_core_mount_storage(RPCS3_CORE_STORAGE_FOLDER, winrt::get_abi(folder),
             "metadata-test", 0, root, sizeof(root), &required);
         games = {};
+        const auto scan_start = std::chrono::steady_clock::now();
         check(mounted == 0 && rpcs3_core_enumerate_games(root, collect, &games) == 0 && games.valid,
             "broker-mounted StorageFolder PARAM.SFO and icon");
+        std::cout << "Brokered scan milliseconds: " << std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - scan_start).count() << '\n';
+        check(games.sizes == native_sizes, "batched brokered scan preserves exact native game sizes");
         check(rpcs3_core_unmount_storage("metadata-test") == 0, "release library broker mount");
         winrt::uninit_apartment();
+        } catch (const winrt::hresult_error& error) {
+            std::cerr << "Broker regression HRESULT=" << std::hex << static_cast<unsigned>(error.code().value)
+                << " " << winrt::to_string(error.message()) << std::endl;
+            ++failures;
+        }
     }
     for (const auto& [path, e] : entries) {
         if (e.group.empty() || (e.type == RPCS3_CORE_CONFIG_ENUM && e.choices.empty()) ||
@@ -155,9 +168,15 @@ int main(int argc, char** argv)
             check(set("Video/Renderer", "Vulkan (Mesa Dozen D3D12)") == 0, "select Mesa Dozen Vulkan");
             snapshot();
             check(entries.at("Video/Renderer").value == "Vulkan (Mesa Dozen D3D12)", "Vulkan selection survives normalization");
+            check(entries.at("Video/Shader Mode").value == "Legacy Recompiler (single-threaded)", "Dozen waits for complete compiled draws");
+            check(entries.at("Video/Shader Mode").flags & RPCS3_CORE_CONFIG_READ_ONLY, "Dozen incomplete shader fallbacks locked");
+            check(set("Video/Shader Mode", "Async Recompiler with Shader Interpreter") == RPCS3_CORE_UNSUPPORTED_RENDERER,
+                "reject unsupported Dozen interpreter fallback");
             check(!(entries.at("Video/Vulkan/Adapter").flags & RPCS3_CORE_CONFIG_READ_ONLY), "Vulkan adapter configuration available");
         }
         check(set("Video/Renderer", "Direct3D 12") == 0, "restore D3D12");
+        snapshot();
+        check(!(entries.at("Video/Shader Mode").flags & RPCS3_CORE_CONFIG_READ_ONLY), "other renderers retain shader mode selection");
     }
     check(entries.at("Audio/Renderer").value == "XAudio2", "UWP XAudio2 output selected");
     check(set("Audio/Enable Buffering", "true") == RPCS3_CORE_OK, "XAudio2 audio buffering available");

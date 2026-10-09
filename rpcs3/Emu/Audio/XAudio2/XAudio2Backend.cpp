@@ -149,6 +149,14 @@ void XAudio2Backend::Play()
 	if (m_playing) return;
 
 	std::lock_guard lock(m_cb_mutex);
+#ifdef RPCS3_UWP
+	if (m_reset_req.observe()) return;
+	if (HRESULT hr = m_source_voice->Start(); FAILED(hr))
+	{
+		m_reset_req = true;
+		return;
+	}
+#endif
 	m_playing = true;
 }
 
@@ -199,16 +207,31 @@ void XAudio2Backend::Pause()
 
 	if (!m_playing) return;
 
-	{
-		std::lock_guard lock(m_cb_mutex);
+	std::lock_guard lock(m_cb_mutex);
+#ifdef RPCS3_UWP
+	// Stop before flushing to discard the current buffer as well. Keep Play
+	// serialized until both operations finish, not just the flag change.
+	if (FAILED(m_source_voice->Stop())) m_reset_req = true;
+#endif
 		m_playing = false;
 		m_last_sample.fill(0);
-	}
 
 	if (HRESULT hr = m_source_voice->FlushSourceBuffers(); FAILED(hr))
 	{
 		XAudio.error("FlushSourceBuffers() failed: %s (0x%08x)", std::system_category().message(hr), static_cast<u32>(hr));
 	}
+#ifdef RPCS3_UWP
+	// Flush completion is asynchronous. Do not allow new PCM to be queued
+	// against the old voice counters until XAudio2 has acknowledged removal.
+	XAUDIO2_VOICE_STATE state{};
+	for (unsigned attempt = 0; attempt < 50; ++attempt)
+	{
+		m_source_voice->GetState(&state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+		if (!state.BuffersQueued) break;
+		Sleep(1);
+	}
+	if (state.BuffersQueued) m_reset_req = true;
+#endif
 }
 
 bool XAudio2Backend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize sample_size, AudioChannelCnt ch_cnt, audio_channel_layout layout)
@@ -302,12 +325,14 @@ bool XAudio2Backend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSi
 		return false;
 	}
 
+#ifndef RPCS3_UWP
 	if (HRESULT hr = m_source_voice->Start(); FAILED(hr))
 	{
 		XAudio.error("Start() failed: %s (0x%08x)", std::system_category().message(hr), static_cast<u32>(hr));
 		CloseUnlocked();
 		return false;
 	}
+#endif
 
 #ifndef RPCS3_UWP
 	if (HRESULT hr = m_device_enumerator->RegisterEndpointNotificationCallback(this); FAILED(hr))
@@ -324,6 +349,9 @@ bool XAudio2Backend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSi
 	}
 
 	m_data_buf.resize(get_sampling_rate() * get_sample_size() * get_channels() * INTERNAL_BUF_SIZE_MS / 1000);
+#ifdef RPCS3_UWP
+	m_submitted_buffers.initialize(m_data_buf.size());
+#endif
 
 	if (use_default_device)
 	{
@@ -370,38 +398,64 @@ void XAudio2Backend::OnVoiceProcessingPassStart(UINT32 BytesRequired) noexcept
 	if (BytesRequired && !m_reset_req.observe() && lock.try_lock_for(std::chrono::microseconds{50}) && m_write_callback && m_playing)
 	{
 #ifdef RPCS3_UWP
-		// Retain the submitted buffer until XAudio2 has finished reading it.
-		XAUDIO2_VOICE_STATE state{};
-		m_source_voice->GetState(&state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
-		if (state.BuffersQueued) return;
+		// BytesRequired is the deficit for this quantum, even if a partially
+		// consumed buffer is still queued. Supply it in a different owned slot.
+		auto* submitted = m_submitted_buffers.acquire();
+		if (!submitted) return;
 		BytesRequired = std::min<u32>(BytesRequired, static_cast<u32>(m_data_buf.size()));
 		BytesRequired -= BytesRequired % (get_sample_size() * get_channels());
-		if (!BytesRequired) return;
+		if (!BytesRequired) { submitted->in_use.store(false, std::memory_order_release); return; }
+		u8* const output = submitted->data.data();
 #else
 		ensure(BytesRequired <= m_data_buf.size(), "XAudio internal buffer is too small. Report to developers!");
+		u8* const output = m_data_buf.data();
 #endif
 
 		const u32 sample_size = get_sample_size() * get_channels();
 		u32 written = 0;
-		try { written = std::min(m_write_callback(BytesRequired, m_data_buf.data()), BytesRequired); }
-		catch (...) { m_reset_req = true; return; }
+#ifdef RPCS3_UWP
+		const u32 requested = static_cast<u32>(XAudio2BufferPool::request_bytes(
+			BytesRequired, submitted->data.size(), sample_size, get_sampling_rate()));
+#else
+		const u32 requested = BytesRequired;
+#endif
+		try { written = std::min(m_write_callback(requested, output), requested); }
+		catch (...)
+		{
+#ifdef RPCS3_UWP
+			submitted->in_use.store(false, std::memory_order_release);
+#endif
+			m_reset_req = true; return;
+		}
 		written -= written % sample_size;
+#ifdef RPCS3_UWP
+		BytesRequired = std::max(BytesRequired, written);
+#endif
 
 		if (written >= sample_size)
 		{
-			memcpy(m_last_sample.data(), m_data_buf.data() + written - sample_size, sample_size);
+			memcpy(m_last_sample.data(), output + written - sample_size, sample_size);
 		}
 
 		for (u32 i = written; i < BytesRequired; i += sample_size)
 		{
-			memcpy(m_data_buf.data() + i, m_last_sample.data(), sample_size);
+			memcpy(output + i, m_last_sample.data(), sample_size);
 		}
 
 		XAUDIO2_BUFFER buffer{};
 		buffer.AudioBytes = BytesRequired;
-		buffer.pAudioData = static_cast<const BYTE*>(m_data_buf.data());
+		buffer.pAudioData = output;
+#ifdef RPCS3_UWP
+		buffer.pContext = submitted;
+#endif
 		// Do not allocate/log on the real-time callback; request recovery on failure.
-		if (FAILED(m_source_voice->SubmitSourceBuffer(&buffer))) m_reset_req = true;
+		if (FAILED(m_source_voice->SubmitSourceBuffer(&buffer)))
+		{
+#ifdef RPCS3_UWP
+			submitted->in_use.store(false, std::memory_order_release);
+#endif
+			m_reset_req = true;
+		}
 	}
 }
 

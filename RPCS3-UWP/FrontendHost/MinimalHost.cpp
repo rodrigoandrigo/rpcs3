@@ -317,56 +317,8 @@ winrt::fire_and_forget MinimalHost::LoadGameFolder(std::wstring token)
 		if (access.ContainsItem(token))
 		{
 			folder = co_await access.GetFolderAsync(token);
-			auto findBoot = [](StorageFolder game) -> winrt::Windows::Foundation::IAsyncOperation<winrt::hstring> {
-				for (const auto relative : {L"PS3_GAME\\USRDIR\\EBOOT.BIN", L"USRDIR\\EBOOT.BIN", L"EBOOT.BIN"})
-				{
-					try
-					{
-						// Resolve one brokered child at a time; picker grants do not
-						// authorize opening a reconstructed native filesystem path.
-						StorageFolder current = game;
-						const std::wstring path(relative);
-						std::size_t begin = 0;
-						while (current)
-						{
-							const auto end = path.find(L'\\', begin);
-							const auto item = co_await current.TryGetItemAsync(path.substr(begin, end - begin));
-							if (end == std::wstring::npos)
-							{
-								if (item && item.try_as<StorageFile>()) co_return relative;
-								break;
-							}
-							current = item ? item.try_as<StorageFolder>() : nullptr;
-							begin = end + 1;
-						}
-					}
-					catch (const winrt::hresult_error& ex) {
-						if (ex.code().value != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) &&
-							ex.code().value != HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)) throw;
-					}
-				}
-				co_return L"";
-			};
-			auto append = [&catalogue](const StorageFolder& game, std::string relative) {
-				std::replace(relative.begin(), relative.end(), '\\', '/');
-				LibraryItem entry;
-				entry.id = 14695981039346656037ull;
-				for (unsigned char c : relative) { entry.id ^= c; entry.id *= 1099511628211ull; }
-				entry.name = winrt::to_string(game.Name()); entry.platform = "PS3"; entry.format = "Folder";
-				entry.launchPath = std::filesystem::path(std::u8string(relative.begin(), relative.end()));
-				catalogue.push_back(std::move(entry));
-			};
-			const auto rootBoot = co_await findBoot(folder);
-			if (!rootBoot.empty()) append(folder, winrt::to_string(rootBoot));
-			else
-			{
-				for (const auto& game : co_await folder.GetFoldersAsync())
-				{
-					if (!*alive) co_return;
-					const auto boot = co_await findBoot(game);
-					if (!boot.empty()) append(game, winrt::to_string(game.Name()) + "/" + winrt::to_string(boot));
-				}
-			}
+			// The mounted core scanner is authoritative. A separate EBOOT walk
+			// duplicated brokered I/O and produced a catalogue discarded below.
 		}
 	}
 	catch (const winrt::hresult_error& ex) {
@@ -589,8 +541,22 @@ void MinimalHost::SetCoreSetting(const CoreSetting& setting, std::string value)
 {
 	const auto result = rpcs3_core_set_config(setting.path.c_str(), value.c_str());
 	if (result != RPCS3_CORE_OK)
+	{
 		m_notifications.Push("Setting rejected: " + setting.name + " (" +
 			std::to_string(result) + ")");
+		return;
+	}
+	// Keep the displayed snapshot in sync without replacing the vector while
+	// DrawCoreSettingsPage is iterating over it. Otherwise each frame restores
+	// the old slider/checkbox value despite a successful core update.
+	for (auto& current : m_coreSettings)
+	{
+		if (current.path == setting.path)
+		{
+			current.value = value;
+			break;
+		}
+	}
 }
 
 void MinimalHost::DrawCoreSettingsPage(std::string_view group)
@@ -620,6 +586,17 @@ void MinimalHost::DrawCoreSettingsPage(std::string_view group)
 			bool value = setting.value == "true";
 			if (ShellCheckbox(label.c_str(), &value))
 				SetCoreSetting(setting, value ? "true" : "false");
+		}
+		else if (setting.path == "Audio/Desired Audio Buffer Duration")
+		{
+			int value = std::stoi(setting.value);
+			const int minimum = std::stoi(setting.minimumValue);
+			const int maximum = std::stoi(setting.maximumValue);
+			if (ShellSliderInt(label.c_str(), &value, minimum, maximum, "%d ms"))
+				SetCoreSetting(setting, std::to_string(value));
+			if (ShellIntegerStepper("Fine adjustment", &value, minimum, maximum, 1, "%d ms"))
+				SetCoreSetting(setting, std::to_string(value));
+			ImGui::TextDisabled("Left/right adjusts by 1 ms; changes are saved immediately.");
 		}
 		else if (setting.type == RPCS3_CORE_CONFIG_ENUM && !setting.choices.empty())
 		{

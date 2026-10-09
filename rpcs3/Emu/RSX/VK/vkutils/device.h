@@ -84,6 +84,8 @@ namespace vk
 
 		u32 descriptor_max_draw_calls = DESCRIPTOR_MAX_DRAW_CALLS;
 		descriptor_indexing_features descriptor_indexing_support{};
+		bool runtime_descriptor_array_support = false;
+		bool uniform_buffer_standard_layout_support = false;
 
 		custom_border_color_features custom_border_color_support{};
 
