@@ -359,6 +359,7 @@ enum dxil_intr {
    DXIL_INTR_STORE_PATCH_CONSTANT = 106,
    DXIL_INTR_OUTPUT_CONTROL_POINT_ID = 107,
    DXIL_INTR_PRIMITIVE_ID = 108,
+   DXIL_INTR_CYCLE_COUNTER_LEGACY = 109,
 
    DXIL_INTR_WAVE_IS_FIRST_LANE = 110,
    DXIL_INTR_WAVE_GET_LANE_INDEX = 111,
@@ -500,7 +501,7 @@ emit_uav_metadata(struct dxil_module *m, const struct dxil_type *struct_type,
                   const char *name, const resource_array_layout *layout,
                   enum dxil_component_type comp_type,
                   enum dxil_resource_kind res_kind,
-                  enum gl_access_qualifier access)
+                  enum gl_access_qualifier access, bool is_rov)
 {
    const struct dxil_mdnode *fields[11];
 
@@ -510,7 +511,7 @@ emit_uav_metadata(struct dxil_module *m, const struct dxil_type *struct_type,
    fields[6] = dxil_get_metadata_int32(m, res_kind); // resource shape
    fields[7] = dxil_get_metadata_int1(m, (access & ACCESS_COHERENT) != 0); // globally-coherent
    fields[8] = dxil_get_metadata_int1(m, false); // has counter
-   fields[9] = dxil_get_metadata_int1(m, false); // is ROV
+   fields[9] = dxil_get_metadata_int1(m, is_rov); // is ROV
    if (res_kind != DXIL_RESOURCE_KIND_RAW_BUFFER &&
        res_kind != DXIL_RESOURCE_KIND_STRUCTURED_BUFFER) {
       metadata_tag_nodes[0] = dxil_get_metadata_int32(m, DXIL_TYPED_BUFFER_ELEMENT_TYPE_TAG);
@@ -1331,10 +1332,21 @@ emit_uav(struct ntd_context *ctx, unsigned binding, unsigned space, unsigned cou
    unsigned id = util_dynarray_num_elements(&ctx->uav_metadata_nodes, const struct dxil_mdnode *);
    resource_array_layout layout = { id, binding, count, space };
 
+   /* D3D12 ROVs provide the per-pixel critical section required by
+    * SPV_EXT_fragment_shader_interlock.  Vulkan's unordered mode permits the
+    * stronger primitive-order guarantee provided by an ROV, so both pixel
+    * execution modes use the same DXIL representation.  Every writable UAV
+    * visible to the fragment shader must be an ROV: mixing ordinary UAVs into
+    * the interlocked region would leave those accesses unordered.
+    */
+   const bool is_rov = ctx->mod.shader_kind == DXIL_PIXEL_SHADER &&
+      (ctx->shader->info.fs.pixel_interlock_ordered ||
+       ctx->shader->info.fs.pixel_interlock_unordered);
    const struct dxil_type *res_type = dxil_module_get_res_type(&ctx->mod, res_kind, comp_type, num_comps, true /* readwrite */);
    res_type = dxil_module_get_array_type(&ctx->mod, res_type, count);
    const struct dxil_mdnode *uav_meta = emit_uav_metadata(&ctx->mod, res_type, name,
-                                                          &layout, comp_type, res_kind, access);
+                                                          &layout, comp_type, res_kind, access,
+                                                          is_rov);
 
    if (!uav_meta)
       return false;
@@ -1347,6 +1359,8 @@ emit_uav(struct ntd_context *ctx, unsigned binding, unsigned space, unsigned cou
    add_resource(ctx, res_kind == DXIL_RESOURCE_KIND_RAW_BUFFER ? DXIL_RES_UAV_RAW : DXIL_RES_UAV_TYPED, res_kind, &layout);
    if (res_kind == DXIL_RESOURCE_KIND_RAW_BUFFER)
       ctx->mod.raw_and_structured_buffers = true;
+   if (is_rov)
+      ctx->mod.feats.rovs = true;
    if (ctx->mod.shader_kind != DXIL_PIXEL_SHADER &&
        ctx->mod.shader_kind != DXIL_COMPUTE_SHADER)
       ctx->mod.feats.uavs_at_every_stage = true;
@@ -2932,7 +2946,25 @@ emit_alu(struct ntd_context *ctx, nir_alu_instr *alu)
       return emit_binop(ctx, alu, alu->op == nir_op_idiv ? DXIL_BINOP_SDIV : DXIL_BINOP_UDIV, src[0], src[1]);
 
    case nir_op_irem: return emit_binop(ctx, alu, DXIL_BINOP_SREM, src[0], src[1]);
-   case nir_op_imod: return emit_binop(ctx, alu, DXIL_BINOP_UREM, src[0], src[1]);
+   case nir_op_imod: {
+      /* SPIR-V SMod has the divisor's sign; LLVM/DXIL SRem has the
+       * dividend's sign.  Unsigned remainder is wrong for either negative
+       * operand.  Correct only non-zero remainders with opposite signs. */
+      const struct dxil_value *zero = dxil_module_get_int_const(&ctx->mod, 0, alu->def.bit_size);
+      const struct dxil_value *rem = dxil_emit_binop(&ctx->mod, DXIL_BINOP_SREM, src[0], src[1], 0);
+      const struct dxil_value *sign = dxil_emit_binop(&ctx->mod, DXIL_BINOP_XOR, src[0], src[1], 0);
+      if (!zero || !rem || !sign)
+         return false;
+      const struct dxil_value *opposite = dxil_emit_cmp(&ctx->mod, DXIL_ICMP_SLT, sign, zero);
+      const struct dxil_value *nonzero = dxil_emit_cmp(&ctx->mod, DXIL_ICMP_NE, rem, zero);
+      if (!opposite || !nonzero)
+         return false;
+      const struct dxil_value *correct = dxil_emit_binop(&ctx->mod, DXIL_BINOP_AND, opposite, nonzero, 0);
+      const struct dxil_value *adjusted = dxil_emit_binop(&ctx->mod, DXIL_BINOP_ADD, rem, src[1], 0);
+      if (!correct || !adjusted)
+         return false;
+      return emit_select(ctx, alu, correct, adjusted, rem);
+   }
    case nir_op_umod: return emit_binop(ctx, alu, DXIL_BINOP_UREM, src[0], src[1]);
    case nir_op_ishl: return emit_shift(ctx, alu, DXIL_BINOP_SHL, src[0], src[1]);
    case nir_op_ishr: return emit_shift(ctx, alu, DXIL_BINOP_ASHR, src[0], src[1]);
@@ -4891,9 +4923,48 @@ emit_reduce(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 }
 
 static bool
+emit_shader_clock(struct ntd_context *ctx, nir_intrinsic_instr *intr)
+{
+   const struct dxil_func *func =
+      dxil_get_function(&ctx->mod, "dx.op.cycleCounterLegacy", DXIL_I64);
+   const struct dxil_value *opcode =
+      dxil_module_get_int32_const(&ctx->mod, DXIL_INTR_CYCLE_COUNTER_LEGACY);
+   if (!func || !opcode)
+      return false;
+
+   const struct dxil_value *counter = dxil_emit_call(&ctx->mod, func, &opcode, 1);
+   if (!counter)
+      return false;
+
+   const struct dxil_value *low =
+      dxil_emit_cast(&ctx->mod, DXIL_CAST_TRUNC, ctx->mod.int32_type, counter);
+   const struct dxil_value *shift = dxil_module_get_int64_const(&ctx->mod, 32);
+   const struct dxil_value *high64 =
+      dxil_emit_binop(&ctx->mod, DXIL_BINOP_LSHR, counter, shift, 0);
+   const struct dxil_value *high =
+      dxil_emit_cast(&ctx->mod, DXIL_CAST_TRUNC, ctx->mod.int32_type, high64);
+   if (!low || !shift || !high64 || !high)
+      return false;
+
+   store_def(ctx, &intr->def, 0, low);
+   store_def(ctx, &intr->def, 1, high);
+   return true;
+}
+
+static bool
 emit_intrinsic(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 {
    switch (intr->intrinsic) {
+   case nir_intrinsic_shader_clock:
+      return emit_shader_clock(ctx, intr);
+   case nir_intrinsic_begin_invocation_interlock:
+   case nir_intrinsic_end_invocation_interlock:
+      /* ROV ordering applies to the complete pixel-shader invocation.  The
+       * SPIR-V markers delimit a region for APIs with explicit interlocks but
+       * therefore require no DXIL instruction here.
+       */
+      ctx->mod.feats.rovs = true;
+      return true;
    case nir_intrinsic_load_global_invocation_id:
       return emit_load_global_invocation_id(ctx, intr);
    case nir_intrinsic_load_local_invocation_id:
@@ -6761,6 +6832,21 @@ type_size_vec4(const struct glsl_type *type, bool bindless)
    return glsl_count_attribute_slots(type, false);
 }
 
+static bool
+dxil_native_atomic_supported(const nir_instr *instr, const void *data)
+{
+   const nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+   switch (nir_intrinsic_atomic_op(intr)) {
+   case nir_atomic_op_fadd:
+   case nir_atomic_op_fmin:
+   case nir_atomic_op_fmax:
+      /* DXIL has integer compare-exchange on the 32-bit storage paths. */
+      return intr->def.bit_size != 32;
+   default:
+      return true;
+   }
+}
+
 static const unsigned dxil_validator_min_capable_version = DXIL_VALIDATOR_1_4;
 static const unsigned dxil_validator_max_capable_version = DXIL_VALIDATOR_1_8;
 static const unsigned dxil_min_shader_model = SHADER_MODEL_6_0;
@@ -6854,6 +6940,13 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
    NIR_PASS(_, s, dxil_nir_ensure_position_writes);
    NIR_PASS(_, s, dxil_nir_lower_system_values);
    NIR_PASS(_, s, nir_lower_io_to_scalar, nir_var_shader_in | nir_var_system_value | nir_var_shader_out, NULL, NULL);
+
+   /* D3D12 does not provide arithmetic float atomics on the baseline shader
+    * models used by Dozen.  Implement 32-bit SSBO/shared add/min/max with a
+    * bit-preserving integer compare-exchange loop before memory accesses are
+    * vectorized or narrowed.
+    */
+   NIR_PASS(_, s, nir_lower_atomics, dxil_native_atomic_supported);
 
    /* Do a round of optimization to try to vectorize loads/stores. Otherwise the addresses used for loads
     * might be too opaque for the pass to see that they're next to each other. */

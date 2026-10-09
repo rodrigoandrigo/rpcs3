@@ -127,10 +127,12 @@ struct dxil_spirv_vertex_runtime_data {
    float viewport_width;
    float viewport_height;
    uint32_t view_index;
-   /* When depth bias is dynamic, the constant value to add to point
-    * primitives when emulating triangle point fill mode. Slope-scaled
-    * depth bias is currently unsupported. */
+   /* Polygon point-fill bias parameters, applied before point expansion. */
    float depth_bias;
+   float depth_bias_slope;
+   float depth_bias_clamp;
+   float viewport_min_depth;
+   float viewport_max_depth;
    /* Dozen's implicit point-fill geometry shader dynamic raster state. */
    uint32_t point_cull_mode;
    uint32_t point_front_ccw;

@@ -164,7 +164,21 @@ endif()
 
 # Vulkan
 set(VULKAN_TARGET 3rdparty_dummy_lib)
-if(USE_VULKAN)
+if(USE_VULKAN AND RPCS3_UWP_DZN)
+	if(NOT RPCS3_BUILD_CORE_DLL OR NOT RPCS3_UWP_D3D12)
+		message(FATAL_ERROR "Embedded DZN requires the UWP core and D3D12 presentation bridge")
+	endif()
+	find_package(Python3 REQUIRED COMPONENTS Interpreter)
+	set(dzn_dispatch "${CMAKE_CURRENT_BINARY_DIR}/dzn_dispatch.cpp")
+	add_custom_command(OUTPUT "${dzn_dispatch}"
+		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/RPCS3-UWP/generate-dzn-dispatch.py"
+			"${CMAKE_CURRENT_SOURCE_DIR}/mesa/src/vulkan/registry/vk.xml" "${dzn_dispatch}"
+		DEPENDS "${CMAKE_SOURCE_DIR}/RPCS3-UWP/generate-dzn-dispatch.py" mesa/src/vulkan/registry/vk.xml VERBATIM)
+	add_library(3rdparty_vulkan STATIC "${dzn_dispatch}")
+	target_include_directories(3rdparty_vulkan PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/mesa/include" PRIVATE "${CMAKE_SOURCE_DIR}/rpcs3" "${CMAKE_SOURCE_DIR}")
+	target_compile_definitions(3rdparty_vulkan PUBLIC HAVE_VULKAN RPCS3_UWP_DZN=1)
+	set(VULKAN_TARGET 3rdparty_vulkan)
+elseif(USE_VULKAN)
 	if(APPLE)
 		if(USE_SYSTEM_MVK)
 			message(STATUS "RPCS3: Using system MoltenVK")

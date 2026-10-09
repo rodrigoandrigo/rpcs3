@@ -603,6 +603,7 @@ struct lower_point_size_data {
    const struct dxil_spirv_runtime_conf *conf;
    nir_variable *position;
    nir_variable *point_size;
+   nir_variable *point_center;
 };
 
 static nir_def *
@@ -664,15 +665,51 @@ lower_point_size_emit(nir_builder *b, nir_instr *instr, void *cb_data)
       output_count++;
    }
    nir_def *position = nir_load_var(b, data->position);
-   nir_def *point_size = nir_load_var(b, data->point_size);
+   /* Vulkan guarantees at least [1, 64] for largePoints.  Dozen exposes that
+    * portable range and implements the rasterization in shader code. */
+   nir_def *point_size = nir_fclamp(b, nir_load_var(b, data->point_size),
+                                    nir_imm_float(b, 1.0f),
+                                    nir_imm_float(b, 64.0f));
    nir_def *viewport = load_viewport_size(b, data->conf);
    nir_def *clip_w = nir_channel(b, position, 3);
    nir_def *half_extent = nir_fmul(
       b, nir_fdiv(b, nir_vec2(b, point_size, point_size), viewport), clip_w);
 
+   /* Points are clipped from their original center before rasterization.
+    * Testing only the expanded corners would incorrectly retain a large point
+    * whose center lies outside the Vulkan clip volume.  ClipDistance and
+    * CullDistance remain ordinary replicated outputs and are subsequently
+    * applied to every generated corner.
+    */
+   nir_def *center_inside = nir_iand(
+      b, nir_iand(b,
+         nir_fge(b, nir_channel(b, position, 0), nir_fneg(b, clip_w)),
+         nir_fge(b, clip_w, nir_channel(b, position, 0))),
+      nir_iand(b,
+         nir_iand(b,
+            nir_fge(b, nir_channel(b, position, 1), nir_fneg(b, clip_w)),
+            nir_fge(b, clip_w, nir_channel(b, position, 1))),
+         nir_iand(b,
+            nir_fge_imm(b, nir_channel(b, position, 2), 0.0f),
+            nir_fge(b, clip_w, nir_channel(b, position, 2)))));
+
+   /* The fragment lowering represents PointCoord as the window-space point
+    * center and subtracts it from FragCoord.  Preserve the original center;
+    * deriving it again from each expanded corner produces four different
+    * centers and invalid coordinates.
+    */
+   nir_def *point_center_ndc =
+      nir_fmul(b, nir_trim_vector(b, position, 2), nir_frcp(b, clip_w));
+   nir_def *point_center = nir_fmul(
+      b, nir_fadd_imm(b,
+         nir_fmul(b, point_center_ndc,
+            nir_vec2(b, nir_imm_float(b, 0.5f), nir_imm_float(b, -0.5f))),
+         0.5f), viewport);
+
    static const int corners[4][2] = {
       { -1, -1 }, { -1, 1 }, { 1, -1 }, { 1, 1 },
    };
+   nir_if *visible = nir_push_if(b, center_inside);
    for (unsigned i = 0; i < ARRAY_SIZE(corners); i++) {
       for (unsigned j = 0; j < output_count; j++)
          nir_copy_var(b, outputs[j].output, outputs[j].saved);
@@ -685,9 +722,11 @@ lower_point_size_emit(nir_builder *b, nir_instr *instr, void *cb_data)
                      nir_channel(b, position, 1)),
          nir_channel(b, position, 2), clip_w);
       nir_store_var(b, data->position, new_position, 0xf);
+      nir_store_var(b, data->point_center, nir_pad_vec4(b, point_center), 0xf);
       nir_emit_vertex(b);
    }
    nir_end_primitive(b);
+   nir_pop_if(b, visible);
    ralloc_free(outputs);
    nir_instr_remove(instr);
    return true;
@@ -707,9 +746,20 @@ dxil_spirv_nir_lower_geometry_point_size(
          shader, nir_var_shader_out, VARYING_SLOT_POS),
       .point_size = nir_find_variable_with_location(
          shader, nir_var_shader_out, VARYING_SLOT_PSIZ),
+      .point_center = nir_find_variable_with_location(
+         shader, nir_var_shader_out, VARYING_SLOT_PNTC),
    };
    if (!data.position || !data.point_size)
       return false;
+
+   if (!data.point_center) {
+      data.point_center = nir_variable_create(shader, nir_var_shader_out,
+                                               glsl_vec4_type(),
+                                               "dzn_point_center");
+      data.point_center->data.location = VARYING_SLOT_PNTC;
+      data.point_center->data.interpolation = INTERP_MODE_NOPERSPECTIVE;
+      shader->info.outputs_written |= VARYING_BIT_PNTC;
+   }
 
    shader->info.gs.output_primitive = MESA_PRIM_TRIANGLE_STRIP;
    shader->info.gs.vertices_out *= 4;
@@ -780,6 +830,10 @@ static bool
 dxil_spirv_write_pntc(nir_shader *nir, const struct dxil_spirv_runtime_conf *conf)
 {
    struct lower_pntc_data data = { .conf = conf };
+   data.pntc = nir_find_variable_with_location(nir, nir_var_shader_out,
+                                               VARYING_SLOT_PNTC);
+   if (data.pntc)
+      return false;
    data.pntc = nir_variable_create(nir, nir_var_shader_out, glsl_vec4_type(), "gl_PointCoord");
    data.pntc->data.location = VARYING_SLOT_PNTC;
    bool progress = nir_shader_instructions_pass(nir, write_pntc_with_pos,

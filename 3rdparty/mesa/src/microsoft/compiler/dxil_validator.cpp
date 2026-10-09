@@ -34,6 +34,9 @@ load_dxil_mod()
    HMODULE existing = nullptr;
    if (GetModuleHandleExW(0, L"DXIL.dll", &existing))
       return existing;
+   HMODULE module = NULL;
+   if (GetModuleHandleExW(0, L"DXIL.dll", &module))
+      return module;
    return LoadPackagedLibrary(L"DXIL.dll", 0);
 #else
    /* First, try to load DXIL.dll from the default search-path */

@@ -2270,6 +2270,10 @@ dzn_instance_add_physical_device(struct vk_instance *instance,
 static VkResult
 dzn_enumerate_physical_devices(struct vk_instance *instance)
 {
+#ifdef _XBOX_UWP
+   /* Xbox/UWP uses the existing DXGI adapter API, not desktop DXCore loading. */
+   return dzn_enumerate_physical_devices_dxgi(instance);
+#else
    VkResult result = dzn_enumerate_physical_devices_dxcore(instance);
 #ifdef _WIN32
    if (result != VK_SUCCESS)
@@ -2277,6 +2281,7 @@ dzn_enumerate_physical_devices(struct vk_instance *instance)
 #endif
 
    return result;
+#endif
 }
 
 static void
@@ -3099,10 +3104,29 @@ dzn_device_create(struct dzn_physical_device *pdev,
     * buffer view. Keep robustness2-enabled devices on bounded descriptor
     * tables so Vulkan descriptor-range bounds remain enforceable.
     */
+   /* Vulkan 1.2's descriptorIndexing aggregate does not enable its individual
+    * features. Applications such as RPCS3 request update-after-bind directly
+    * without enabling the aggregate or the promoted EXT extension. Those
+    * requests still require live descriptor heaps: the table path snapshots
+    * descriptors while recording, before legal deferred updates arrive.
+    */
+   bool needs_live_descriptors =
+      device->vk.enabled_features.descriptorBindingUniformBufferUpdateAfterBind ||
+      device->vk.enabled_features.descriptorBindingSampledImageUpdateAfterBind ||
+      device->vk.enabled_features.descriptorBindingStorageImageUpdateAfterBind ||
+      device->vk.enabled_features.descriptorBindingStorageBufferUpdateAfterBind ||
+      device->vk.enabled_features.descriptorBindingUniformTexelBufferUpdateAfterBind ||
+      device->vk.enabled_features.descriptorBindingStorageTexelBufferUpdateAfterBind ||
+      device->vk.enabled_features.descriptorBindingUpdateUnusedWhilePending ||
+      device->vk.enabled_features.descriptorBindingPartiallyBound ||
+      device->vk.enabled_features.descriptorBindingVariableDescriptorCount ||
+      device->vk.enabled_features.runtimeDescriptorArray;
+
    device->bindless = !device->vk.enabled_features.robustBufferAccess2 &&
       !device->vk.enabled_features.pipelineRobustness &&
       ((instance->debug_flags & DZN_DEBUG_BINDLESS) != 0 ||
        device->vk.enabled_features.descriptorIndexing ||
+       needs_live_descriptors ||
        device->vk.enabled_extensions.EXT_descriptor_indexing ||
        device->vk.enabled_features.bufferDeviceAddress ||
        device->vk.enabled_extensions.EXT_buffer_device_address);
