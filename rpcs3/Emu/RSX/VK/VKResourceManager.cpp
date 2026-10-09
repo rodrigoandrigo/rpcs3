@@ -2,6 +2,7 @@
 #include "VKResourceManager.h"
 #include "VKGSRender.h"
 #include "VKCommandStream.h"
+#include <chrono>
 
 namespace vk
 {
@@ -256,6 +257,15 @@ namespace vk
 			// Physical heap headroom must not override budget pressure on Xbox.
 			if (load_severity >= rsx::problem_severity::moderate)
 			{
+#ifdef RPCS3_UWP_DZN
+				// This query is also used by trimming. Do not emit two warnings per
+				// frame while a process-wide budget remains overcommitted.
+				static thread_local std::chrono::steady_clock::time_point next_warning{};
+				const auto now = std::chrono::steady_clock::now();
+				if (now < next_warning)
+					return load_severity;
+				next_warning = now + std::chrono::seconds(5);
+#endif
 				// NOTE: For some reason fmt::format with a sized float followed by percentage sign causes random crashing.
 				// This is a bug unrelated to this, but explains why we're going with integral percentages here.
 				const auto application_memory_load = (local_memory_usage * 100) / mem_info.device_local_total_bytes;
@@ -279,9 +289,22 @@ namespace vk
 
 	void vmm_check_memory_usage()
 	{
+#ifdef RPCS3_UWP_DZN
+		// Only throttle preventive recovery. Allocation-failure callers still
+		// invoke vmm_handle_memory_pressure directly and recover immediately.
+		// A hard GPU sync every frame cannot fix pressure from non-evictable
+		// resources or other process allocations and prevents forward progress.
+		static thread_local std::chrono::steady_clock::time_point next_recovery{};
+		const auto now = std::chrono::steady_clock::now();
+		if (now < next_recovery)
+			return;
+#endif
 		if (const auto load_severity = vmm_determine_memory_load_severity();
 			load_severity >= rsx::problem_severity::moderate)
 		{
+#ifdef RPCS3_UWP_DZN
+			next_recovery = now + std::chrono::seconds(1);
+#endif
 			vmm_handle_memory_pressure(load_severity);
 		}
 	}
