@@ -256,6 +256,8 @@ public:
 		{
 			if (ImGui::MenuItem("Open games folder")) m_host.Execute(HostCommand::AddContent);
 			if (ImGui::MenuItem("Refresh game list")) m_host.Execute(HostCommand::RefreshContent);
+			if (ImGui::MenuItem("Install packages / updates")) m_host.Execute(HostCommand::InstallPackage);
+			if (ImGui::MenuItem("Install firmware")) m_host.Execute(HostCommand::InstallFirmware);
 			ImGui::Separator();
 			if (ImGui::MenuItem("Exit")) m_host.Execute(HostCommand::ExitApplication);
 			ImGui::EndMenu();
@@ -271,19 +273,25 @@ public:
 		}
 		if (ImGui::BeginMenu("Configuration"))
 		{
-			if (ImGui::MenuItem("Settings")) m_host.Execute(HostCommand::OpenSettings);
-			if (ImGui::MenuItem("CPU / GPU")) m_host.Execute(HostCommand::OpenGraphics);
+			for (const char* page : {"CPU", "GPU", "Audio", "I/O", "System", "Network", "Advanced", "Emulator", "Debug"})
+				if (ImGui::MenuItem(page)) m_host.OpenSettingsPage(page);
+			if (ImGui::MenuItem("GUI")) m_host.OpenSettingsPage("GUI");
 			if (ImGui::MenuItem("Pads")) m_host.Execute(HostCommand::OpenControllers);
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("Manage"))
 		{
+			if (ImGui::MenuItem("Virtual file system")) m_host.OpenSettingsPage("Mounts");
+			if (ImGui::MenuItem("Network services")) m_host.OpenSettingsPage("Network");
+			if (ImGui::MenuItem("IPC")) m_host.OpenSettingsPage("IPC");
 			if (ImGui::MenuItem("Game library")) m_host.Execute(HostCommand::OpenTitleManager);
 			if (ImGui::MenuItem("RPCS3 tools")) m_host.Execute(HostCommand::OpenTools);
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("Utilities"))
 		{
+			if (ImGui::MenuItem("Log viewer")) { m_showDesktopLog = true; }
+			if (ImGui::MenuItem("Virtual file system settings")) m_host.OpenSettingsPage("VFS");
 			if (ImGui::MenuItem("Tools")) m_host.Execute(HostCommand::OpenTools);
 			if (ImGui::MenuItem("Save settings")) m_host.Execute(HostCommand::SaveSettings);
 			ImGui::EndMenu();
@@ -293,6 +301,23 @@ public:
 			if (ImGui::MenuItem("List", nullptr, !m_desktopGrid)) m_desktopGrid = false;
 			if (ImGui::MenuItem("Grid", nullptr, m_desktopGrid)) m_desktopGrid = true;
 			ImGui::MenuItem("Log panel", nullptr, &m_showDesktopLog);
+			ImGui::MenuItem("Toolbar", nullptr, &m_showDesktopToolbar);
+			if (ImGui::BeginMenu("Game list icons")) {
+				for (const auto& [label, size] : std::array<std::pair<const char*, float>, 4>{{{"Tiny", 28.0f}, {"Small", 40.0f}, {"Medium", 64.0f}, {"Large", 96.0f}}})
+					if (ImGui::MenuItem(label, nullptr, m_desktopIconSize == size)) m_desktopIconSize = size;
+				ImGui::EndMenu();
+			}
+			if (ImGui::BeginMenu("Game categories")) {
+				for (const char* category : {"DG", "HG", "1P", "2P", "2G", "PP", "MN", "PE", "GD", "HM", "AM", "AP", "AS", "AT", "AV", "BV", "WT", "CB", "SF", "SD", "MS", "2D", "/OS", ""}) {
+					bool enabled = !m_hiddenCategories.contains(category);
+					LibraryItem categoryItem;
+					categoryItem.category = category;
+					if (ImGui::MenuItem(CategoryFor(categoryItem), nullptr, &enabled)) {
+						if (enabled) m_hiddenCategories.erase(category); else m_hiddenCategories.emplace(category, true);
+					}
+				}
+				ImGui::EndMenu();
+			}
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("Help"))
@@ -330,6 +355,7 @@ public:
 	void DrawDesktopList(Frontend& frontend, const ShellPresentation& presentation)
 	{
 		constexpr ImGuiTableFlags tableFlags = ImGuiTableFlags_RowBg |
+			ImGuiTableFlags_Hideable | ImGuiTableFlags_Reorderable |
 			ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuterH |
 			ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY |
 			ImGuiTableFlags_SizingStretchProp;
@@ -351,6 +377,7 @@ public:
 		for (std::size_t index = 0; index < frontend.Catalogue().size(); ++index)
 		{
 			const LibraryItem& item = frontend.Catalogue()[index];
+			if (m_hiddenCategories.contains(item.category)) continue;
 			if (!ContainsInsensitive(item.name, m_search.data()) &&
 				!ContainsInsensitive(SerialFor(item), m_search.data()))
 				continue;
@@ -400,7 +427,9 @@ public:
 			ImGui::TableSetColumnIndex(8); ImGui::Text("%llu:%02llu:%02llu",
 				item.playTimeSeconds / 3600, (item.playTimeSeconds / 60) % 60, item.playTimeSeconds % 60);
 			ImGui::TableSetColumnIndex(9); ImGui::TextUnformatted(item.compatibility.empty() ? "No results found" : item.compatibility.c_str());
-			ImGui::TableSetColumnIndex(10); ImGui::Text("%.2f GiB", static_cast<double>(item.sizeOnDisk) / (1024 * 1024 * 1024));
+			ImGui::TableSetColumnIndex(10);
+			if (item.sizeOnDisk) ImGui::Text("%.2f GiB", static_cast<double>(item.sizeOnDisk) / (1024 * 1024 * 1024));
+			else ImGui::TextUnformatted("Not calculated");
 		}
 		ImGui::EndTable();
 	}
@@ -414,6 +443,7 @@ public:
 			for (std::size_t index = 0; index < frontend.Catalogue().size(); ++index)
 			{
 				const LibraryItem& item = frontend.Catalogue()[index];
+				if (m_hiddenCategories.contains(item.category)) continue;
 				if (!ContainsInsensitive(item.name, m_search.data())) continue;
 				ImGui::TableNextColumn();
 				ImGui::PushID(static_cast<int>(index));
@@ -451,9 +481,9 @@ public:
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 6.0f, 4.0f });
 		ImGui::Begin("##rpcs3-desktop", nullptr, flags);
 		DrawDesktopMenu(frontend);
-		DrawDesktopToolbar(frontend);
+		if (m_showDesktopToolbar) DrawDesktopToolbar(frontend);
 		ImGui::SeparatorText("Game List");
-		const float logHeight = m_showDesktopLog ? 170.0f : 0.0f;
+		const float logHeight = m_showDesktopLog ? std::min(170.0f, ImGui::GetContentRegionAvail().y * 0.3f) : 0.0f;
 		ImGui::BeginChild("##desktop-library", { 0.0f, -logHeight }, true);
 		if (frontend.Catalogue().empty())
 		{
@@ -470,14 +500,12 @@ public:
 			{
 				if (ImGui::BeginTabItem("Log"))
 				{
-					ImGui::TextColored({ 0.42f, 0.92f, 0.35f, 1.0f }, "RPCS3-UWP frontend initialized");
-					ImGui::TextUnformatted("RSX: Direct3D 12 renderer available");
-					ImGui::Text("Game library: %zu title(s)", frontend.Catalogue().size());
+					m_host.DrawLogPanel(false);
 					ImGui::EndTabItem();
 				}
 				if (ImGui::BeginTabItem("TTY"))
 				{
-					ImGui::TextDisabled("TTY output will appear while a title is running.");
+					m_host.DrawLogPanel(true);
 					ImGui::EndTabItem();
 				}
 				ImGui::EndTabBar();
@@ -1178,6 +1206,8 @@ private:
 	std::array<char, 256> m_search{};
 	bool m_desktopGrid = false;
 	bool m_showDesktopLog = true;
+	bool m_showDesktopToolbar = true;
+	std::map<std::string, bool, std::less<>> m_hiddenCategories;
 	float m_desktopIconSize = 42.0f;
 	struct LaunchAnimation
 	{

@@ -11,6 +11,10 @@
 #pragma GCC diagnostic ignored "-Wold-style-cast"
 #endif
 #include "SDL3/SDL.h"
+#ifdef RPCS3_UWP
+#define SDL_MAIN_HANDLED
+#include "SDL3/SDL_main.h"
+#endif
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
 #endif
@@ -91,9 +95,17 @@ bool sdl_instance::initialize_impl()
 	}
 
 	sdl_log.notice("Initializing SDL ...");
+#ifdef RPCS3_UWP
+	// The embedding DLL does not enter through SDL_main; the UWP host owns main.
+	SDL_SetMainReady();
+#endif
 
 	// Set non-dynamic hints before SDL_Init
 	set_hint(SDL_HINT_JOYSTICK_THREAD, "1");
+#ifdef RPCS3_UWP
+	set_hint(SDL_HINT_JOYSTICK_WGI, "1");
+	set_hint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#endif
 
 	// DS3 pressure sensitive buttons
 #ifdef _WIN32
@@ -107,7 +119,14 @@ bool sdl_instance::initialize_impl()
 	set_hint(SDL_HINT_JOYSTICK_HIDAPI_LG4FF, "0");
 #endif
 
-	if (!SDL_Init(SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC | SDL_INIT_CAMERA))
+#ifdef RPCS3_UWP
+	// The UWP SDL build supplies WGI gamepads (including rumble), but not
+	// desktop haptics/camera subsystems. Do not fail all input for those.
+	constexpr auto subsystems = SDL_INIT_GAMEPAD;
+#else
+	constexpr auto subsystems = SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC | SDL_INIT_CAMERA;
+#endif
+	if (!SDL_Init(subsystems))
 	{
 		sdl_log.error("Could not initialize! SDL Error: %s", SDL_GetError());
 		return false;

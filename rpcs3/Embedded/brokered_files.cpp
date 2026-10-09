@@ -26,18 +26,20 @@ struct apartment
     ~apartment() { CoUninitialize(); }
 };
 
-void io_error(const winrt::hresult_error& error)
+void io_error(const winrt::hresult_error& error, const std::string& path = {})
 {
     const HRESULT code = error.code();
-    fs::g_tls_error = code == E_ACCESSDENIED ? fs::error::acces :
+    fs::g_tls_error = code == E_INVALIDARG ? fs::error::inval :
+        code == HRESULT_FROM_WIN32(ERROR_DIRECTORY) ? fs::error::notdir :
+        code == E_ACCESSDENIED ? fs::error::acces :
         code == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || code == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)
         ? fs::error::noent : fs::error::unknown;
-    if (fs::g_tls_error == fs::error::noent)
+    if (fs::g_tls_error == fs::error::noent || fs::g_tls_error == fs::error::notdir)
         broker_log.trace("Storage item not found: HRESULT=0x%08x: %s",
             static_cast<u32>(code), winrt::to_string(error.message()));
     else
-        broker_log.error("Storage operation failed: HRESULT=0x%08x: %s",
-            static_cast<u32>(code), winrt::to_string(error.message()));
+        broker_log.error("Storage operation failed: path='%s', HRESULT=0x%08x: %s",
+            path, static_cast<u32>(code), winrt::to_string(error.message()));
 }
 
 bool allowed_mode(bs_t<fs::open_mode> mode, bool writable)
@@ -176,7 +178,14 @@ class broker_device final : public fs::device_base
     StorageFolder folder(const std::vector<std::string>& path, size_t depth)
     {
         auto current = m_folder.get();
-        for (size_t i = 0; i < depth; ++i) current = current.GetFolderAsync(winrt::to_hstring(path[i])).get();
+        for (size_t i = 0; i < depth; ++i)
+        {
+            const auto item = current.TryGetItemAsync(winrt::to_hstring(path[i])).get();
+            if (!item) throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND));
+            if (!item.IsOfType(StorageItemTypes::Folder))
+                throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_DIRECTORY));
+            current = item.as<StorageFolder>();
+        }
         return current;
     }
 public:
@@ -210,7 +219,8 @@ public:
             if (m_kind == RPCS3_CORE_STORAGE_FOLDER)
             {
                 auto parent = folder(names, names.size() - 1);
-                auto item = parent.GetItemAsync(winrt::to_hstring(names.back())).get();
+                auto item = parent.TryGetItemAsync(winrt::to_hstring(names.back())).get();
+                if (!item) { fs::g_tls_error = fs::error::noent; return false; }
                 const auto props = item.GetBasicPropertiesAsync().get();
                 info = {item.IsOfType(StorageItemTypes::Folder), false, m_writable, props.Size()};
                 info.mtime = props.DateModified().time_since_epoch().count() / 10'000'000 - 11'644'473'600;
@@ -226,7 +236,7 @@ public:
                 m_file.get().GetBasicPropertiesAsync().get().Size() : m_stream.get().Size()};
             return true;
         }
-        catch (const winrt::hresult_error& ex) { io_error(ex); return false; }
+        catch (const winrt::hresult_error& ex) { io_error(ex, path); return false; }
     }
     bool statfs(const std::string&, fs::device_stat&) override
     { fs::g_tls_error = fs::error::inval; return false; } // No fabricated capacity.
@@ -245,7 +255,14 @@ public:
                 StorageFile file{nullptr};
                 if (mode & fs::create) file = parent.CreateFileAsync(winrt::to_hstring(names.back()),
                     (mode & fs::excl) ? CreationCollisionOption::FailIfExists : CreationCollisionOption::OpenIfExists).get();
-                else file = parent.GetFileAsync(winrt::to_hstring(names.back())).get();
+                else
+                {
+                    const auto item = parent.TryGetItemAsync(winrt::to_hstring(names.back())).get();
+                    if (!item) { fs::g_tls_error = fs::error::noent; return {}; }
+                    if (!item.IsOfType(StorageItemTypes::File))
+                    { fs::g_tls_error = fs::error::isdir; return {}; }
+                    file = item.as<StorageFile>();
+                }
                 stream = file.OpenAsync(writing ? FileAccessMode::ReadWrite : FileAccessMode::Read).get();
             }
             else
@@ -272,7 +289,7 @@ public:
             if (mode & fs::append) result->seek(0, fs::seek_end);
             return result;
         }
-        catch (const winrt::hresult_error& ex) { io_error(ex); return {}; }
+        catch (const winrt::hresult_error& ex) { io_error(ex, path); return {}; }
     }
     std::unique_ptr<fs::dir_base> open_dir(const std::string& path) override
     {
@@ -324,7 +341,7 @@ public:
             }
             return std::make_unique<directory>(std::move(entries));
         }
-        catch (const winrt::hresult_error& ex) { io_error(ex); return {}; }
+        catch (const winrt::hresult_error& ex) { io_error(ex, path); return {}; }
     }
     bool create_dir(const std::string& path) override
     {
@@ -336,7 +353,7 @@ public:
             folder(names, names.size() - 1).CreateFolderAsync(winrt::to_hstring(names.back()),
                 CreationCollisionOption::FailIfExists).get(); return true;
         }
-        catch (const winrt::hresult_error& ex) { io_error(ex); return false; }
+        catch (const winrt::hresult_error& ex) { io_error(ex, path); return false; }
     }
     bool remove(const std::string& path) override
     {
@@ -349,7 +366,7 @@ public:
             if (item.IsOfType(StorageItemTypes::Folder)) { fs::g_tls_error = fs::error::isdir; return false; }
             item.DeleteAsync(StorageDeleteOption::PermanentDelete).get(); return true;
         }
-        catch (const winrt::hresult_error& ex) { io_error(ex); return false; }
+        catch (const winrt::hresult_error& ex) { io_error(ex, path); return false; }
     }
     bool remove_dir(const std::string& path) override
     {
@@ -379,7 +396,7 @@ public:
             }
             return true;
         }
-        catch (const winrt::hresult_error& ex) { io_error(ex); return false; }
+        catch (const winrt::hresult_error& ex) { io_error(ex, from); return false; }
     }
     bool trunc(const std::string& path, u64 length) override
     {

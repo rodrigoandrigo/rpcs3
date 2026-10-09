@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include <algorithm>
 #include "../core_api.h"
 #include <chrono>
 #include <filesystem>
@@ -44,6 +45,7 @@ int main(int argc, char** argv)
     API(rpcs3_core_reset_config); API(rpcs3_core_save_settings);
     API(rpcs3_core_shutdown); API(rpcs3_core_release);
     API(rpcs3_core_enumerate_games);
+	API(rpcs3_core_enumerate_libraries);
     API(rpcs3_core_mount_storage); API(rpcs3_core_unmount_storage);
     events state;
     const rpcs3_core_callbacks callbacks{sizeof(callbacks), 2, &state, nullptr,
@@ -80,6 +82,10 @@ int main(int argc, char** argv)
         std::cout << (ok ? "PASS " : "FAIL ") << label << '\n'; failures += !ok;
     };
     check(snapshot() == 0 && entries.size() > 200, "complete configuration snapshot");
+	unsigned libraryCount = 0;
+	check(rpcs3_core_enumerate_libraries([](void* user, const char* name, uint32_t) {
+		if (name && *name) ++*static_cast<unsigned*>(user);
+	}, &libraryCount) == 0 && libraryCount > 0, "desktop firmware library registry");
     check(rpcs3_core_enumerate_games(nullptr, [](void*, const rpcs3_core_game_info*) {}, nullptr)
         == RPCS3_CORE_INVALID_ARGUMENT, "reject invalid library scan");
     if (argc == 5) {
@@ -110,7 +116,15 @@ int main(int argc, char** argv)
             "broker-mounted StorageFolder PARAM.SFO and icon");
         std::cout << "Brokered scan milliseconds: " << std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - scan_start).count() << '\n';
-        check(games.sizes == native_sizes, "batched brokered scan preserves exact native game sizes");
+        check(games.sizes == native_sizes && std::all_of(games.sizes.begin(), games.sizes.end(),
+            [](const auto& game) { return game.second == 0; }), "native and brokered recognition skip folder size calculation");
+        games = {};
+        const std::string file_as_directory = std::string(root) + "PARAM.SFO/child";
+        check(rpcs3_core_enumerate_games(file_as_directory.c_str(), collect, &games) == RPCS3_CORE_IO_ERROR && games.count == 0,
+            "brokered lookup rejects file used as parent directory without throwing");
+        const std::string missing_directory = std::string(root) + "missing-regression-directory/child";
+        check(rpcs3_core_enumerate_games(missing_directory.c_str(), collect, &games) == RPCS3_CORE_IO_ERROR && games.count == 0,
+            "brokered lookup handles missing parent directory");
         check(rpcs3_core_unmount_storage("metadata-test") == 0, "release library broker mount");
         winrt::uninit_apartment();
         } catch (const winrt::hresult_error& error) {
@@ -148,15 +162,19 @@ int main(int argc, char** argv)
     snapshot();
     const auto libraries = entries.at("Core/Libraries Control").value;
     check(libraries.find("libfoo.sprx") != std::string::npos, "collection serialization");
+	check(entries.at("Core/Libraries Control").choices.find("libfoo.sprx") != std::string::npos,
+		"typed library collection entries");
     check(set("Core/Libraries Control", "invalid-scalar") == RPCS3_CORE_INVALID_ARGUMENT, "reject malformed collection");
     snapshot();
     check(entries.at("Core/Libraries Control").value == libraries, "invalid input preserves previous collection");
     check(set("Log", "{SYS: Notice}") == 0, "apply log map");
+	snapshot();
+	check(entries.at("Log").choices == "SYS\x1eNotice", "typed log channel and severity entries");
     check(set("Log", "{SYS: InvalidLevel}") == RPCS3_CORE_INVALID_ARGUMENT, "reject invalid log level");
     check(set("Audio/Renderer", "Cubeb") == RPCS3_CORE_UNSUPPORTED_RENDERER, "reject unavailable backend");
     if (entries.at("Video/Renderer").choices.find("Mesa Gallium D3D12") != std::string::npos) {
-        check(entries.at("Video/Renderer").defaults == "OpenGL (Mesa Gallium D3D12)", "OpenGL default renderer");
         const bool dozen = entries.at("Video/Renderer").choices.find("Mesa Dozen") != std::string::npos;
+        check(entries.at("Video/Renderer").defaults == (dozen ? "Vulkan (Mesa Dozen D3D12)" : "OpenGL (Mesa Gallium D3D12)"), "default renderer matches available backend");
         check(entries.at("Video/Renderer").choices == (dozen ?
             "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)\x1fVulkan (Mesa Dozen D3D12)" :
             "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)"), "available embedded renderers");
@@ -190,7 +208,7 @@ int main(int argc, char** argv)
     check(rpcs3_core_reset_config("") == 0 && wait() == 0, "reset whole tree");
     snapshot();
     if (entries.at("Video/Renderer").choices.find("Mesa Gallium D3D12") != std::string::npos)
-        check(entries.at("Video/Renderer").value == "OpenGL (Mesa Gallium D3D12)", "reset selects OpenGL");
+        check(entries.at("Video/Renderer").value == entries.at("Video/Renderer").defaults, "reset selects default renderer");
     check(entries.at("Audio/Renderer").value == entries.at("Audio/Renderer").defaults &&
         entries.at("Input/Output/Mouse").value == entries.at("Input/Output/Mouse").defaults,
         "reset preserves UWP backend policy");

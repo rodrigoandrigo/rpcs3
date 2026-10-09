@@ -1,4 +1,5 @@
 #include "MinimalHost.h"
+#include "DesktopSettingsLayout.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <charconv>
 #include <fstream>
 #include <iomanip>
 #include <utility>
@@ -148,6 +150,78 @@ std::optional<std::string> MinimalHost::TakeStreamFailure()
 
 void MinimalHost::Log(LogLevel, std::string_view)
 {
+}
+
+void MinimalHost::AppendCoreLog(std::uint32_t level, std::uint64_t timestamp,
+	std::string_view channel, std::string_view message)
+{
+	// Called by pump on the UI thread; never touch this collection from producers.
+	if (m_logRecords.size() >= 4096)
+		m_logRecords.erase(m_logRecords.begin(), m_logRecords.begin() + 512);
+	m_logRecords.push_back({level, timestamp, std::string(channel), std::string(message)});
+}
+
+void MinimalHost::DrawLogPanel(bool tty)
+{
+	ImGui::PushID(tty ? "tty" : "core-log");
+	ImGui::Checkbox("Follow", &m_logFollow);
+	if (!tty)
+	{
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(110.0f);
+		ImGui::Combo("##severity", &m_logLevel, "Always\0Fatal\0Error\0TODO\0Success\0Warning\0Notice\0Trace\0");
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - 65.0f));
+		ImGui::InputTextWithHint("##filter", "Filter log...", m_logFilter.data(), m_logFilter.size());
+		ImGui::SameLine();
+		if (ImGui::Button("Clear")) m_logRecords.clear();
+	}
+	ImGui::BeginChild("records", {0, 0}, false, ImGuiWindowFlags_HorizontalScrollbar);
+	const bool atBottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0f;
+	if (tty)
+	{
+		const auto now = std::chrono::steady_clock::now();
+		if (now - m_ttyRefresh >= std::chrono::milliseconds(250))
+		{
+			m_ttyRefresh = now;
+			std::ifstream input(StateRoot() / "rpcs3" / "TTY.log", std::ios::binary | std::ios::ate);
+			if (input) {
+				const auto size = input.tellg();
+				if (size >= 0) {
+					const auto count = std::min<std::streamoff>(size, 65536);
+					input.seekg(size - count);
+					m_ttyText.resize(static_cast<std::size_t>(count));
+					input.read(m_ttyText.data(), count);
+					m_ttyText.resize(static_cast<std::size_t>(input.gcount()));
+				}
+			}
+		}
+		ImGui::TextUnformatted(m_ttyText.c_str());
+	}
+	else
+	{
+		constexpr const char* severity[] = {"A", "F", "E", "U", "S", "W", "N", "T"};
+		for (const auto& record : m_logRecords) {
+			if (record.level > static_cast<unsigned>(m_logLevel)) continue;
+			const std::string filter(m_logFilter.data());
+			if (!filter.empty() && record.channel.find(filter) == std::string::npos &&
+				record.message.find(filter) == std::string::npos) continue;
+			const ImVec4 color = record.level == 1 || record.level == 2 ? ImVec4{1, .35f, .35f, 1} :
+				record.level == 4 ? ImVec4{.45f, .9f, .35f, 1} :
+				record.level == 5 ? ImVec4{1, .8f, .3f, 1} : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			ImGui::PushStyleColor(ImGuiCol_Text, color);
+			char stamp[64]{};
+			std::snprintf(stamp, sizeof(stamp), "%llu.%06llu", static_cast<unsigned long long>(record.timestamp / 1000000),
+				static_cast<unsigned long long>(record.timestamp % 1000000));
+			const std::string line = std::string(severity[std::min(record.level, 7u)]) + " " +
+				stamp + " " + record.channel + ": " + record.message;
+			ImGui::TextUnformatted(line.c_str());
+			ImGui::PopStyleColor();
+		}
+	}
+	if (m_logFollow && atBottom) ImGui::SetScrollHereY(1.0f);
+	ImGui::EndChild();
+	ImGui::PopID();
 }
 
 #ifdef RPCS3_HOST_WITH_CORE
@@ -535,6 +609,10 @@ void MinimalHost::RefreshCoreSettings()
 		return;
 	m_coreSettings = std::move(settings);
 	m_coreSettingEditors.clear();
+	if (m_firmwareLibraries.empty())
+		rpcs3_core_enumerate_libraries([](void* user, const char* name, uint32_t hle) {
+			static_cast<MinimalHost*>(user)->m_firmwareLibraries.emplace_back(name, hle != 0);
+		}, this);
 }
 
 void MinimalHost::SetCoreSetting(const CoreSetting& setting, std::string value)
@@ -562,41 +640,72 @@ void MinimalHost::SetCoreSetting(const CoreSetting& setting, std::string value)
 void MinimalHost::DrawCoreSettingsPage(std::string_view group)
 {
 	SectionTitle(std::string(group).c_str());
-	ImGui::TextDisabled("RPCS3 core configuration (Qt-independent)");
 	ImGui::Separator();
-	ImGui::InputTextWithHint("##settings-filter", "Search settings...",
-		m_coreSettingsFilter.data(), m_coreSettingsFilter.size());
 	const bool stopped = rpcs3_core_state() == 0;
-	for (const CoreSetting& setting : m_coreSettings)
+	std::vector<std::pair<std::string, const CoreSetting*>> visible;
+	for (const auto& setting : m_coreSettings)
 	{
-		if (setting.group != group)
-			continue;
-		const std::string filter(m_coreSettingsFilter.data());
-		if (!filter.empty() && setting.path.find(filter) == std::string::npos)
-			continue;
+		const auto placement = std::ranges::find_if(desktopSettings,
+			[&](const auto& entry) { return entry.path == setting.path; });
+		const bool mapped = placement != std::end(desktopSettings);
+		const std::string_view fallback = setting.group == "Core" || setting.group == "Video" ? "Advanced" :
+			setting.group == "Input/Output" ? "I/O" : setting.group == "Net" ? "Network" :
+			setting.group == "Miscellaneous" ? "Emulator" : setting.group;
+		const bool auxiliary = group == "IPC" || group == "Log" || group == "Mounts" || group == "Savestate" || group == "VFS";
+		const bool auxiliaryMatch = auxiliary && (setting.group == group || setting.path.starts_with(std::string(group) + "/"));
+		if (auxiliaryMatch || (!auxiliary && ((mapped && placement->page == group) || (!mapped && fallback == group))))
+			visible.emplace_back(mapped ? std::string(placement->section) : "Additional settings", &setting);
+	}
+	std::stable_sort(visible.begin(), visible.end(), [](const auto& left, const auto& right) {
+		const auto rank = [](std::string_view section) {
+			const auto item = std::ranges::find_if(desktopSettings,
+				[&](const auto& entry) { return entry.section == section; });
+			return std::distance(std::begin(desktopSettings), item);
+		};
+		return rank(left.first) < rank(right.first);
+	});
+	const float availableWidth = ImGui::GetContentRegionAvail().x;
+	const unsigned columns = group == "Advanced" && availableWidth >= 900.0f ? 3u : availableWidth >= 760.0f ? 2u : 1u;
+	if (!ImGui::BeginTable("settings-columns", columns, ImGuiTableFlags_SizingStretchSame)) return;
+	for (unsigned column = 0; column < columns; ++column)
+	{
+	ImGui::TableNextColumn();
+	std::string section;
+	for (const auto& [sectionName, entry] : visible)
+	{
+		const CoreSetting& setting = *entry;
+		const auto position = std::ranges::find_if(desktopSettings,
+			[&](const auto& item) { return item.path == setting.path; });
+		const unsigned targetColumn = position == std::end(desktopSettings) ? columns - 1 : std::min(position->column, columns - 1);
+		if (columns > 1 && targetColumn != column) continue;
+		if (section != sectionName) {
+			section = sectionName;
+			ImGui::Spacing();
+			ImGui::SeparatorText(section.c_str());
+		}
 		const bool readOnly = (setting.flags & RPCS3_CORE_CONFIG_READ_ONLY) != 0;
 		const bool dynamic = (setting.flags & RPCS3_CORE_CONFIG_DYNAMIC) != 0;
 		const bool disabled = readOnly || (!stopped && !dynamic);
 		ImGui::PushID(setting.path.c_str());
-		const std::string label = setting.path.starts_with(std::string(group) + "/") ?
-			setting.path.substr(group.size() + 1) : setting.name;
+		const std::string label = setting.name;
 		if (disabled) ImGui::BeginDisabled();
 		if (setting.type == RPCS3_CORE_CONFIG_BOOL)
 		{
 			bool value = setting.value == "true";
-			if (ShellCheckbox(label.c_str(), &value))
+			if (ImGui::Checkbox("##enabled", &value))
 				SetCoreSetting(setting, value ? "true" : "false");
+			ImGui::SameLine();
+			ImGui::TextWrapped("%s", label.c_str());
+			if (!disabled && ImGui::IsItemClicked()) SetCoreSetting(setting, value ? "false" : "true");
 		}
 		else if (setting.path == "Audio/Desired Audio Buffer Duration")
 		{
 			int value = std::stoi(setting.value);
 			const int minimum = std::stoi(setting.minimumValue);
 			const int maximum = std::stoi(setting.maximumValue);
-			if (ShellSliderInt(label.c_str(), &value, minimum, maximum, "%d ms"))
+			ImGui::TextWrapped("%s", label.c_str());
+			if (ShellIntegerStepper("Duration", &value, minimum, maximum, 1, "%d ms"))
 				SetCoreSetting(setting, std::to_string(value));
-			if (ShellIntegerStepper("Fine adjustment", &value, minimum, maximum, 1, "%d ms"))
-				SetCoreSetting(setting, std::to_string(value));
-			ImGui::TextDisabled("Left/right adjusts by 1 ms; changes are saved immediately.");
 		}
 		else if (setting.type == RPCS3_CORE_CONFIG_ENUM && !setting.choices.empty())
 		{
@@ -608,8 +717,131 @@ void MinimalHost::DrawCoreSettingsPage(std::string_view group)
 				choices.push_back({setting.choices[index], setting.choices[index], true});
 				if (setting.choices[index] == setting.value) selected = index;
 			}
-			if (ShellCombo(label.c_str(), &selected, choices))
-				SetCoreSetting(setting, setting.choices[selected]);
+			ImGui::TextWrapped("%s", label.c_str());
+			ImGui::SetNextItemWidth(-1.0f);
+			if (ImGui::BeginCombo("##choice", setting.value.c_str())) {
+				for (std::size_t index = 0; index < choices.size(); ++index) {
+					if (ImGui::Selectable(choices[index].label.c_str(), selected == index))
+						SetCoreSetting(setting, setting.choices[index]);
+					if (selected == index) ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+		}
+		else if (setting.type == RPCS3_CORE_CONFIG_NUMBER && !setting.minimumValue.empty() &&
+			!setting.maximumValue.empty() && setting.value.find('.') == std::string::npos &&
+			setting.maximumValue.find('.') == std::string::npos &&
+			setting.maximumValue.size() < 10)
+		{
+			int value = std::stoi(setting.value);
+			if (ShellIntegerStepper(label.c_str(), &value, std::stoi(setting.minimumValue),
+				std::stoi(setting.maximumValue))) SetCoreSetting(setting, std::to_string(value));
+		}
+		else if (setting.type == RPCS3_CORE_CONFIG_NUMBER)
+		{
+			ImGui::SetNextItemWidth(std::min(240.0f, ImGui::GetContentRegionAvail().x));
+			if (setting.value.find('.') != std::string::npos || setting.maximumValue.find('.') != std::string::npos) {
+				double value = std::strtod(setting.value.c_str(), nullptr);
+				if (ImGui::InputDouble(label.c_str(), &value, 0, 0, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue))
+					SetCoreSetting(setting, std::to_string(value));
+			}
+			else if (!setting.minimumValue.empty() && setting.minimumValue.front() == '-') {
+				std::int64_t value = 0;
+				std::from_chars(setting.value.data(), setting.value.data() + setting.value.size(), value);
+				if (ImGui::InputScalar(label.c_str(), ImGuiDataType_S64, &value, nullptr, nullptr, nullptr, ImGuiInputTextFlags_EnterReturnsTrue))
+					SetCoreSetting(setting, std::to_string(value));
+			}
+			else {
+				std::uint64_t value = 0;
+				const auto parsed = std::from_chars(setting.value.data(), setting.value.data() + setting.value.size(), value);
+				if (parsed.ec != std::errc{}) ImGui::TextWrapped("%s: %s", label.c_str(), setting.value.c_str());
+				else if (ImGui::InputScalar(label.c_str(), ImGuiDataType_U64, &value, nullptr, nullptr, nullptr, ImGuiInputTextFlags_EnterReturnsTrue))
+					SetCoreSetting(setting, std::to_string(value));
+			}
+		}
+		else if (setting.type == RPCS3_CORE_CONFIG_COLLECTION)
+		{
+			// Only supported typed collection editors are exposed, never arbitrary YAML.
+			const auto quote = [](std::string_view text) {
+				std::string result = "\"";
+				for (char c : text) {
+					if (c == '\n') { result += "\\n"; continue; }
+					if (c == '\r') { result += "\\r"; continue; }
+					if (c == '\t') { result += "\\t"; continue; }
+					if (c == '\\' || c == '\"') result += '\\'; result += c;
+				}
+				return result + "\"";
+			};
+			auto values = setting.choices;
+			const bool libraries = setting.path == "Core/Libraries Control";
+			const bool channels = setting.path == "Log";
+			ImGui::TextWrapped("%s", label.c_str());
+			if (libraries || channels) {
+				bool changed = false;
+				if (libraries) {
+					ImGui::InputTextWithHint("##library-search", "Search firmware libraries...", m_libraryFilter.data(), m_libraryFilter.size());
+					ImGui::BeginChild("firmware-libraries", {0, 240.0f}, true);
+					for (const auto& [name, defaultHle] : m_firmwareLibraries) {
+						if (m_libraryFilter.front() && name.find(m_libraryFilter.data()) == std::string::npos) continue;
+						const auto hle = std::ranges::find(values, name + ":hle");
+						const auto lle = std::ranges::find(values, name + ":lle");
+						int selected = hle != values.end() ? 1 : lle != values.end() ? 2 : 0;
+						ImGui::PushID(name.c_str());
+						ImGui::TextUnformatted(name.c_str());
+						ImGui::SetNextItemWidth(-1.0f);
+						if (ImGui::Combo("##override", &selected, defaultHle ? "Default (HLE)\0HLE\0LLE\0" : "Default (LLE)\0HLE\0LLE\0")) {
+							std::erase(values, name + ":hle"); std::erase(values, name + ":lle");
+							if (selected) values.push_back(name + (selected == 1 ? ":hle" : ":lle"));
+							changed = true;
+						}
+						ImGui::PopID();
+						if (changed) break;
+					}
+					ImGui::EndChild();
+				}
+				for (std::size_t i = 0; i < values.size(); ++i) {
+					ImGui::PushID(static_cast<int>(i));
+					const auto separator = values[i].find('\x1e');
+					const std::string name = values[i].substr(0, separator);
+					if (channels && separator != std::string::npos) {
+						std::vector<ChoiceItem> levels;
+						std::size_t selected = 0;
+						for (const char* level : {"Nothing", "Fatal", "Error", "TODO", "Success", "Warning", "Notice", "Trace"}) {
+							if (values[i].substr(separator + 1) == level) selected = levels.size();
+							levels.push_back({level, level, true});
+						}
+						if (ShellCombo(name.c_str(), &selected, levels)) {
+							values[i] = name + "\x1e" + levels[selected].id; changed = true;
+						}
+					} else ImGui::TextUnformatted(name.c_str());
+					ImGui::SameLine();
+					if (ImGui::SmallButton("Remove")) { values.erase(values.begin() + i); changed = true; }
+					ImGui::PopID();
+					if (changed) break;
+				}
+				if (channels) {
+				auto [editor, inserted] = m_coreSettingEditors.try_emplace(setting.path);
+				if (inserted) editor->second.resize(256);
+				ImGui::SetNextItemWidth(std::min(280.0f, ImGui::GetContentRegionAvail().x));
+				ImGui::InputTextWithHint("##entry", libraries ? "Library name (HLE/LLE override)" : "Log channel", editor->second.data(), editor->second.size());
+				ImGui::SameLine();
+				if (ImGui::Button("Add") && editor->second.front()) {
+					values.push_back(std::string(editor->second.data()) + (channels ? "\x1eNotice" : ""));
+					editor->second.front() = 0; changed = true;
+				}
+				}
+				if (changed) {
+					std::string serialized = channels ? "{" : "[";
+					for (std::size_t i = 0; i < values.size(); ++i) {
+						if (i) serialized += ", ";
+						const auto split = values[i].find('\x1e');
+						serialized += quote(values[i].substr(0, split));
+						if (channels) serialized += ": " + quote(values[i].substr(split + 1));
+					}
+					serialized += channels ? "}" : "]";
+					SetCoreSetting(setting, serialized);
+				}
+			} else ImGui::TextWrapped("This device collection has no native UWP editor yet. Its saved configuration is preserved.");
 		}
 		else
 		{
@@ -629,37 +861,36 @@ void MinimalHost::DrawCoreSettingsPage(std::string_view group)
 				}
 				return 0;
 			};
-			if (setting.type == RPCS3_CORE_CONFIG_COLLECTION)
-				ImGui::InputTextMultiline("##value", editor->second.data(), editor->second.size(),
-					{ -92.0f, 120.0f }, ImGuiInputTextFlags_CallbackResize, resize, &editor->second);
-			else
-				ImGui::InputText("##value", editor->second.data(), editor->second.size(),
-					ImGuiInputTextFlags_CallbackResize, resize, &editor->second);
+			ImGui::InputText("##value", editor->second.data(), editor->second.size(),
+				ImGuiInputTextFlags_CallbackResize, resize, &editor->second);
 			ImGui::SameLine();
 			if (ShellButton("Apply", {84.0f, 0.0f}))
 				SetCoreSetting(setting, editor->second.data());
 		}
 		if (disabled) ImGui::EndDisabled();
-		if (!setting.minimumValue.empty())
-			ImGui::TextDisabled("Range: %s to %s", setting.minimumValue.c_str(), setting.maximumValue.c_str());
-		if (!readOnly)
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 		{
-			ImGui::TextDisabled("Default: %s", setting.defaultValue.c_str());
-			if (stopped && ShellButton("Restore default", { 150.0f, 0.0f }))
-				SetCoreSetting(setting, setting.defaultValue);
+			ImGui::BeginTooltip();
+			ImGui::Text("Default: %s", setting.defaultValue.c_str());
+			if (!setting.minimumValue.empty())
+				ImGui::Text("Range: %s to %s", setting.minimumValue.c_str(), setting.maximumValue.c_str());
+			if (disabled) ImGui::TextWrapped("%s", readOnly ? setting.restriction.c_str() : "Stop emulation to change");
+			ImGui::EndTooltip();
 		}
-		if (readOnly) ImGui::TextWrapped("%s", setting.restriction.c_str());
-		else if (!stopped && !dynamic) ImGui::TextDisabled("Stop emulation to change");
+		if (!readOnly && stopped && ImGui::BeginPopupContextItem("defaults")) {
+			if (ImGui::MenuItem("Restore default")) SetCoreSetting(setting, setting.defaultValue);
+			ImGui::EndPopup();
+		}
 		ImGui::PopID();
 	}
+	}
+	ImGui::EndTable();
 	ImGui::Separator();
 	ImGui::BeginDisabled(!stopped || group == "Mounts" || group == "IPC");
 	if (ShellButton("Reset this page"))
 	{
-		const std::string prefix(group);
-		const auto result = rpcs3_core_reset_config(prefix.c_str());
-		if (result != RPCS3_CORE_OK)
-			m_notifications.Push("Reset rejected: " + std::to_string(result));
+		for (const auto& [name, entry] : visible)
+			if (!(entry->flags & RPCS3_CORE_CONFIG_READ_ONLY)) SetCoreSetting(*entry, entry->defaultValue);
 	}
 	ImGui::EndDisabled();
 }
@@ -745,6 +976,16 @@ void MinimalHost::Execute(HostCommand command)
 {
 	switch (command)
 	{
+	case HostCommand::InstallFirmware:
+#ifdef RPCS3_HOST_WITH_CORE
+		PickFirmware();
+#endif
+		break;
+	case HostCommand::InstallPackage:
+#ifdef RPCS3_HOST_WITH_CORE
+		PickPackage();
+#endif
+		break;
 	case HostCommand::RefreshContent:
 		LoadGameFolder(L"rpcs3-game-library");
 		break;
@@ -824,6 +1065,12 @@ void MinimalHost::Execute(HostCommand command)
 	}
 }
 
+void MinimalHost::OpenSettingsPage(std::string_view page)
+{
+	m_pendingSettingsPage = page == "GUI" ? "interface" : "rpcs3-" + std::string(page);
+	m_activePage = "settings";
+}
+
 void MinimalHost::DrawSettingsPage(std::string_view pageId)
 {
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -831,10 +1078,12 @@ void MinimalHost::DrawSettingsPage(std::string_view pageId)
 		return;
 	const ShellLayoutContext context = MakeShellLayout(viewport->WorkSize,
 		viewport->WorkPos);
-	const float panelInset = 32.0f;
+	const float panelInset = std::min(24.0f, std::min(context.layoutUnitsW, context.layoutUnitsH) * 0.025f);
 	UnitRect panel{ panelInset, panelInset,
 		context.layoutUnitsW - panelInset * 2.0f,
 		context.layoutUnitsH - panelInset * 2.0f };
+	if (pageId == "settings")
+		panel = CenteredPanel(context, std::min(1040.0f, panel.w), std::min(760.0f, panel.h));
 	if (pageId == "context")
 	{
 		const bool metadataSearch = m_metadataEditor && m_metadataEditor->IsOpen() &&
@@ -924,8 +1173,12 @@ void MinimalHost::DrawSettingsPage(std::string_view pageId)
 		{
 			groups.insert(setting.group);
 		}
-		std::vector<std::string> orderedGroups(groups.begin(), groups.end());
-		std::ranges::sort(orderedGroups);
+		std::vector<std::string> orderedGroups{"CPU", "GPU", "Audio", "I/O", "System", "Network", "Advanced", "Emulator", "Debug"};
+		std::vector<std::string> extraGroups(groups.begin(), groups.end());
+		std::ranges::sort(extraGroups);
+		for (const auto& group : extraGroups)
+			if (group != "Core" && group != "Video" && group != "Input/Output" && group != "Net" && group != "Miscellaneous" &&
+				std::ranges::find(orderedGroups, group) == orderedGroups.end()) orderedGroups.push_back(group);
 		for (const std::string& group : orderedGroups)
 		{
 			corePages.push_back({
@@ -938,6 +1191,11 @@ void MinimalHost::DrawSettingsPage(std::string_view pageId)
 #endif
 		if (!m_pendingSettingsPage.empty())
 		{
+			if (m_pendingSettingsPage == "rpcs3-Core") m_pendingSettingsPage = "rpcs3-CPU";
+			if (m_pendingSettingsPage == "rpcs3-Video") m_pendingSettingsPage = "rpcs3-GPU";
+			if (m_pendingSettingsPage == "rpcs3-Input/Output") m_pendingSettingsPage = "rpcs3-I/O";
+			if (m_pendingSettingsPage == "rpcs3-Net") m_pendingSettingsPage = "rpcs3-Network";
+			if (m_pendingSettingsPage == "rpcs3-Miscellaneous") m_pendingSettingsPage = "rpcs3-Emulator";
 			m_settingsView.SelectPage(m_pendingSettingsPage, model, corePages);
 			m_pendingSettingsPage.clear();
 		}
@@ -1082,7 +1340,7 @@ void MinimalHost::DrawSettingsPage(std::string_view pageId)
 void MinimalHost::DrawGraphicsPage()
 {
 #ifdef RPCS3_HOST_WITH_CORE
-	if (m_coreReady) DrawCoreSettingsPage("Video");
+	if (m_coreReady) DrawCoreSettingsPage("GPU");
 	else ImGui::TextDisabled("Waiting for the RPCS3 core to initialize...");
 #else
 	const GraphicsViewModel model;

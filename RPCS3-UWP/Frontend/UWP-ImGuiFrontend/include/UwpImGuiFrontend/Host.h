@@ -23,6 +23,8 @@ enum class HostCommand : std::uint8_t
 	SaveSettings,
 	ExitApplication,
 	RefreshContent,
+	InstallFirmware,
+	InstallPackage,
 };
 
 class IFrontendHost : public ICompanionHost
@@ -36,6 +38,8 @@ public:
 	virtual void ReleaseTexture(TextureHandle texture) = 0;
 	[[nodiscard]] virtual TextureHandle AcquireVideoFrame(const std::filesystem::path&) { return {}; }
 	virtual void StopVideoPlayback() {}
+	virtual void DrawLogPanel(bool tty) { }
+	virtual void OpenSettingsPage(std::string_view) { Execute(HostCommand::OpenSettings); }
 	virtual bool RequestLaunch(ItemId item) = 0;
 	virtual void OpenContextMenu(ItemId item) = 0;
 	virtual void Execute(HostCommand command) = 0;

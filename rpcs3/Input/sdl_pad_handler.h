@@ -69,6 +69,9 @@ public:
 	};
 
 	sdl_info sdl{};
+#ifdef RPCS3_UWP
+	int uwp_slot = -1;
+#endif
 
 	std::array<f32, 3> values_accel{};
 	std::array<f32, 3> values_gyro{};

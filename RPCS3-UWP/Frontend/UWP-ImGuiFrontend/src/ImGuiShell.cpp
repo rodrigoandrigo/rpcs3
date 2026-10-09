@@ -23,7 +23,8 @@ bool UnitRect::Contains(ImVec2 point) const noexcept
 
 const ShellThemeCollection& ShellThemes() noexcept
 {
-	static const ShellThemeCollection themes{{
+	static const ShellThemeCollection themes = [] {
+	ShellThemeCollection result{{
 		{
 			"Default Dark",
 			true,
@@ -110,6 +111,29 @@ const ShellThemeCollection& ShellThemes() noexcept
 			{ 0.38f, 1.00f, 0.78f, 1.00f },
 		},
 	}};
+	for (auto& theme : result)
+	{
+		// Prefer luminance separation and opaque surfaces over vivid accents.
+		const auto muted = [](ImVec4 color) {
+			const float gray = color.x * 0.2126f + color.y * 0.7152f + color.z * 0.0722f;
+			color.x = gray + (color.x - gray) * 0.55f;
+			color.y = gray + (color.y - gray) * 0.55f;
+			color.z = gray + (color.z - gray) * 0.55f;
+			return color;
+		};
+		theme.panelBase = muted(theme.panelBase);
+		theme.backgroundAccent = muted(theme.backgroundAccent);
+		theme.shapeColor = muted(theme.shapeColor);
+		theme.panelBase.w = 0.96f;
+		theme.panelBorder = {0.52f, 0.54f, 0.58f, 0.70f};
+		theme.textPrimary = {0.96f, 0.96f, 0.97f, 1.0f};
+		theme.textSecondary = {0.78f, 0.80f, 0.83f, 1.0f};
+		theme.cursorNormal = muted(theme.cursorNormal);
+		theme.cursorGlow = muted(theme.cursorGlow);
+		theme.pageIndicatorActive = muted(theme.pageIndicatorActive);
+	}
+	return result;
+	}();
 	return themes;
 }
 

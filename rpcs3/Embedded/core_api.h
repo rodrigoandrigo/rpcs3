@@ -119,12 +119,16 @@ struct rpcs3_core_game_info
     uint32_t is_iso, custom_icon;
     const void* icon_data;
     uint32_t icon_size;
-    uint64_t size_on_disk;
+    uint64_t size_on_disk; /* 0 when not calculated; enumeration does not traverse game folders for size. */
     uint32_t custom_config, custom_pad_config;
 };
 typedef void (*rpcs3_core_game_callback)(void* user, const struct rpcs3_core_game_info* info);
 RPCS3_CORE_API int32_t rpcs3_core_enumerate_games(const char* root_utf8,
     rpcs3_core_game_callback callback, void* user);
+
+/* The same firmware library registry used by desktop settings. */
+typedef void (*rpcs3_core_library_callback)(void* user, const char* name, uint32_t default_hle);
+RPCS3_CORE_API int32_t rpcs3_core_enumerate_libraries(rpcs3_core_library_callback callback, void* user);
 
 enum rpcs3_core_config_type
 {

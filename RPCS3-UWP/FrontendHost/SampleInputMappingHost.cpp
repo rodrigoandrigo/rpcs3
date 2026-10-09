@@ -70,48 +70,10 @@ void AddCommonControls(std::vector<EmulatedControlDescriptor>& controls,
 	}
 }
 
-void AddMotionAndPointer(std::vector<EmulatedControlDescriptor>& controls,
-	bool touch)
-{
-	for (const auto& [id, label, kind, group] : std::array{
-		std::tuple{ "accel_x", "Accelerometer X", InputControlKind::Accelerometer,
-			"Accelerometer" },
-		std::tuple{ "accel_y", "Accelerometer Y", InputControlKind::Accelerometer,
-			"Accelerometer" },
-		std::tuple{ "accel_z", "Accelerometer Z", InputControlKind::Accelerometer,
-			"Accelerometer" },
-		std::tuple{ "gyro_x", "Gyroscope X", InputControlKind::Gyroscope,
-			"Gyroscope" },
-		std::tuple{ "gyro_y", "Gyroscope Y", InputControlKind::Gyroscope,
-			"Gyroscope" },
-		std::tuple{ "gyro_z", "Gyroscope Z", InputControlKind::Gyroscope,
-			"Gyroscope" },
-		std::tuple{ "pointer_x", "Pointer X", InputControlKind::Pointer, "Pointer" },
-		std::tuple{ "pointer_y", "Pointer Y", InputControlKind::Pointer, "Pointer" },
-		std::tuple{ "pointer_press", "Pointer Press", InputControlKind::Touch,
-			"Pointer" } })
-	{
-		controls.push_back({ id, label, group, kind });
-	}
-	if (touch)
-	{
-		controls.push_back({ "touch_x", "Touch X", "Touch", InputControlKind::Pointer });
-		controls.push_back({ "touch_y", "Touch Y", "Touch", InputControlKind::Pointer });
-		controls.push_back({ "touch_press", "Touch Press", "Touch", InputControlKind::Touch });
-	}
-}
 
 std::string_view ControllerPreviewAsset(std::string_view controllerTypeId)
 {
-	if (controllerTypeId == "xbox-one-series")
-		return "xbox-one-series.png";
-	if (controllerTypeId == "wiiu-gamepad")
-		return "wii-u-gamepad.png";
-	if (controllerTypeId == "wiiu-pro" || controllerTypeId == "wiiu-classic")
-		return "wii-u-pro-controller.png";
-	if (controllerTypeId == "wii-remote")
-		return "wii-remote.png";
-	return {};
+	return controllerTypeId == "xbox-one-series" ? "xbox-one-series.png" : std::string_view{};
 }
 }
 
@@ -171,6 +133,12 @@ MappingSaveResult SampleInputMappingHost::SetProfileStorePath(
 	{
 		if (draft.player >= 8)
 			return { false, "The controller profile store contains an invalid player" };
+		if (draft.emulatedControllerTypeId != "xbox-one-series")
+		{
+			const auto name = draft.name;
+			draft = MakeDefaultProfile(draft.player, draft.titleId, "xbox-one-series", draft.defaultDeviceId);
+			draft.name = name;
+		}
 		draft.dirty = false;
 		savedProfiles[ScopeKey(draft.player, draft.titleId)] = std::move(draft);
 	}
@@ -178,6 +146,12 @@ MappingSaveResult SampleInputMappingHost::SetProfileStorePath(
 	{
 		if (draft.player >= 8 || draft.titleId || draft.name.empty())
 			return { false, "The controller profile store contains an invalid named profile" };
+		if (draft.emulatedControllerTypeId != "xbox-one-series")
+		{
+			const auto name = draft.name;
+			draft = MakeDefaultProfile(draft.player, draft.titleId, "xbox-one-series", draft.defaultDeviceId);
+			draft.name = name;
+		}
 		draft.dirty = false;
 		const std::uint8_t player = draft.player;
 		const std::string name = draft.name;
@@ -251,17 +225,7 @@ std::vector<DsuServerModel> SampleInputMappingHost::EnumerateDsuServers()
 std::vector<EmulatedControllerDescriptor>
 SampleInputMappingHost::EnumerateEmulatedControllerTypes(std::uint8_t)
 {
-	return {
-		MakeXboxOneSeriesControllerDescriptor(),
-		{ "wiiu-gamepad", "Wii U GamePad", ControllerPreviewLayout::ScreenController,
-			{ "X", "A", "B", "Y" } },
-		{ "wiiu-pro", "Wii U Pro Controller", ControllerPreviewLayout::TopDualStick,
-			{ "X", "A", "B", "Y" } },
-		{ "wiiu-classic", "Wii U Classic Controller",
-			ControllerPreviewLayout::BottomDualStick, { "X", "A", "B", "Y" } },
-		{ "wii-remote", "Wii Remote", ControllerPreviewLayout::Remote,
-			{ "1", "A", "2", "B" } },
-	};
+	return {MakeXboxOneSeriesControllerDescriptor()};
 }
 
 TextureHandle SampleInputMappingHost::GetControllerPreviewTexture(
@@ -286,35 +250,9 @@ TextureHandle SampleInputMappingHost::GetControllerPreviewTexture(
 std::vector<EmulatedControlDescriptor> SampleInputMappingHost::ControlsFor(
 	std::string_view controllerTypeId)
 {
+	if (controllerTypeId != "xbox-one-series") return {};
 	std::vector<EmulatedControlDescriptor> controls;
-	const bool remote = controllerTypeId == "wii-remote";
-	AddCommonControls(controls, !remote);
-	if (remote)
-	{
-		for (const auto& [id, label] : std::array{
-			std::pair{ "a", "A" }, std::pair{ "b", "B" },
-			std::pair{ "one", "1" }, std::pair{ "two", "2" },
-			std::pair{ "plus", "+" }, std::pair{ "minus", "-" },
-			std::pair{ "home", "Home" } })
-		{
-			controls.push_back({ id, label, "Wii Remote Buttons",
-				InputControlKind::Button });
-		}
-		controls.push_back({ "nunchuk_c", "C", "Nunchuk Buttons",
-			InputControlKind::Button });
-		controls.push_back({ "nunchuk_z", "Z", "Nunchuk Buttons",
-			InputControlKind::Button });
-		for (const auto& [id, label] : std::array{
-			std::pair{ "nunchuk_up", "Up" }, std::pair{ "nunchuk_right", "Right" },
-			std::pair{ "nunchuk_down", "Down" }, std::pair{ "nunchuk_left", "Left" } })
-		{
-			controls.push_back({ id, label, "Nunchuk Stick", InputControlKind::Axis });
-		}
-		AddMotionAndPointer(controls, false);
-		return controls;
-	}
-	if (controllerTypeId == "xbox-one-series")
-	{
+	AddCommonControls(controls, true);
 		for (const auto& [id, label, kind, group] : std::array{
 			std::tuple{ "a", "A", InputControlKind::Button, "Buttons" },
 			std::tuple{ "b", "B", InputControlKind::Button, "Buttons" },
@@ -330,32 +268,7 @@ std::vector<EmulatedControlDescriptor> SampleInputMappingHost::ControlsFor(
 		{
 			controls.push_back({ id, label, group, kind });
 		}
-		return controls;
-	}
 
-	for (const auto& [id, label, kind, group] : std::array{
-		std::tuple{ "a", "A", InputControlKind::Button, "Buttons" },
-		std::tuple{ "b", "B", InputControlKind::Button, "Buttons" },
-		std::tuple{ "x", "X", InputControlKind::Button, "Buttons" },
-		std::tuple{ "y", "Y", InputControlKind::Button, "Buttons" },
-		std::tuple{ "l", "L", InputControlKind::Button, "Buttons" },
-		std::tuple{ "r", "R", InputControlKind::Button, "Buttons" },
-		std::tuple{ "zl", "ZL", InputControlKind::Trigger, "Triggers" },
-		std::tuple{ "zr", "ZR", InputControlKind::Trigger, "Triggers" },
-		std::tuple{ "plus", "+", InputControlKind::Button, "Buttons" },
-		std::tuple{ "minus", "-", InputControlKind::Button, "Buttons" },
-		std::tuple{ "home", "Home", InputControlKind::Button, "Buttons" } })
-	{
-		controls.push_back({ id, label, group, kind });
-	}
-	if (controllerTypeId == "wiiu-gamepad")
-	{
-		controls.push_back({ "microphone", "Microphone", "GamePad Actions",
-			InputControlKind::Button });
-		controls.push_back({ "screen", "Screen", "GamePad Actions",
-			InputControlKind::Button });
-		AddMotionAndPointer(controls, true);
-	}
 	return controls;
 }
 
@@ -367,42 +280,9 @@ SampleInputMappingHost::EnumerateEmulatedControls(std::uint8_t,
 }
 
 std::vector<InputSettingDraft> SampleInputMappingHost::CreateControllerSettings(
-	std::uint8_t, std::string_view controllerTypeId)
+	std::uint8_t, std::string_view)
 {
-	std::vector<InputSettingDraft> settings;
-	if (controllerTypeId == "wiiu-gamepad")
-		settings.push_back(ToggleSetting("toggle_display", "Toggle GamePad display",
-			"GamePad", false));
-	if (controllerTypeId == "wii-remote")
-	{
-		settings.push_back({ .id = "device_type", .label = "Wii Remote extension",
-			.group = "Wii Remote", .kind = InputSettingKind::Choice,
-			.choiceValue = "none", .choices = {
-				{ "none", "None" }, { "nunchuk", "Nunchuk" },
-				{ "motionplus", "MotionPlus" },
-				{ "motionplus-nunchuk", "MotionPlus + Nunchuk" },
-			} });
-	}
-	if (controllerTypeId == "wiiu-gamepad" || controllerTypeId == "wii-remote")
-	{
-		settings.push_back(NumberSetting("accelerometer_sensitivity",
-			"Accelerometer sensitivity", "Accelerometer", 100, 25, 300, 5, "%"));
-		settings.push_back(NumberSetting("gyroscope_sensitivity",
-			"Gyroscope sensitivity", "Gyroscope", 100, 25, 300, 5, "%"));
-		settings.push_back(NumberSetting("gyroscope_deadzone",
-			"Gyroscope dead zone", "Gyroscope", 0, 0, 180, 1, " deg/s"));
-		settings.push_back(NumberSetting("gyroscope_calibration_period",
-			"Stable-input calibration period", "Gyroscope", 3, 0, 30, 1, " s"));
-		settings.push_back(NumberSetting("pointer_sensitivity_x",
-			"Horizontal pointer sensitivity", "Pointer", 100, 25, 300, 5, "%"));
-		settings.push_back(NumberSetting("pointer_sensitivity_y",
-			"Vertical pointer sensitivity", "Pointer", 100, 25, 300, 5, "%"));
-		settings.push_back(ToggleSetting("pointer_invert_x", "Invert pointer X",
-			"Pointer", false));
-		settings.push_back(ToggleSetting("pointer_invert_y", "Invert pointer Y",
-			"Pointer", false));
-	}
-	return settings;
+	return {};
 }
 
 InputDeviceSettingsDraft SampleInputMappingHost::CreateInputDeviceSettings(
@@ -514,8 +394,7 @@ ControllerProfileDraft SampleInputMappingHost::MakeDefaultProfile(
 	draft.name = titleId ? TitleProfileName(*titleId, player) :
 		"controller" + std::to_string(player);
 	draft.sourceProfileName = "Recommended";
-	draft.emulatedControllerTypeId = controllerTypeId.empty() ?
-		"xbox-one-series" : std::string(controllerTypeId);
+	draft.emulatedControllerTypeId = "xbox-one-series";
 	const auto devices = EnumerateInputDevices();
 	if (!preferredDeviceId.empty())
 		draft.defaultDeviceId = std::string(preferredDeviceId);
@@ -542,14 +421,9 @@ ControllerProfileDraft SampleInputMappingHost::MakeDefaultProfile(
 		{ "right_stick_up", "RightStickY+" }, { "right_stick_right", "RightStickX+" },
 		{ "right_stick_down", "RightStickY-" }, { "right_stick_left", "RightStickX-" },
 		{ "a", "A" }, { "b", "B" }, { "x", "X" }, { "y", "Y" },
-		{ "one", "X" }, { "two", "Y" }, { "l", "LeftShoulder" },
+		{ "l", "LeftShoulder" },
 		{ "r", "RightShoulder" }, { "zl", "LeftTrigger" },
 		{ "zr", "RightTrigger" }, { "plus", "Menu" }, { "minus", "View" },
-		{ "nunchuk_c", "LeftShoulder" }, { "nunchuk_z", "LeftTrigger" },
-		{ "nunchuk_up", "LeftStickY+" }, { "nunchuk_right", "LeftStickX+" },
-		{ "nunchuk_down", "LeftStickY-" }, { "nunchuk_left", "LeftStickX-" },
-		{ "pointer_x", "Pointer X" }, { "pointer_y", "Pointer Y" },
-		{ "pointer_press", "Pointer Press" },
 	};
 	for (const EmulatedControlDescriptor& control : ControlsFor(
 		draft.emulatedControllerTypeId))
@@ -598,7 +472,7 @@ MappingSaveResult SampleInputMappingHost::SaveProfileDrafts(
 	for (const ControllerProfileDraft& draft : drafts)
 	{
 		if (draft.player >= 8 || draft.name.empty() ||
-			draft.emulatedControllerTypeId.empty() ||
+			draft.emulatedControllerTypeId != "xbox-one-series" ||
 			!players.insert(draft.player).second)
 		{
 			return { false, "The sample profile batch is invalid" };

@@ -4,7 +4,90 @@ RPCS3-UWP is an experimental UWP host for the RPCS3 PlayStation 3 emulator. It e
 
 The project is intended for Windows UWP/AppContainer environments and Xbox development scenarios. It is not an upstream RPCS3 build and does not use the desktop Qt frontend.
 
+## Settings and desktop UI alignment
+
+Version 1.0.0.81 replaces the settings sidebar with horizontal tabs and maps
+184 core options to the pages, group order and columns in the desktop
+`settings_dialog.ui`. The dialog is bounded to the application viewport, scrolls
+vertically, and switches to one column on narrow windows. Advanced uses three
+columns when space permits. Controller bumpers switch tabs. Advanced, Emulator,
+Debug, performance overlay and shader-loading settings are included.
+
+Boolean, enum, integer and floating-point options use typed controls. Firmware
+library overrides use the core's desktop library registry with Default/HLE/LLE
+choices. Log channels use severity selectors. Raw YAML collection editing is
+not exposed. Device collections without a native editor retain their saved
+values and explicitly report that limitation.
+
+The Log tab now displays actual core callbacks with severity, timestamp,
+channel and message, including guest-thread prefixes. It supports filtering,
+severity selection, clearing the UI tail and following new messages. The TTY
+tab reads the actual `rpcs3/TTY.log`. Both views are bounded; full core records
+remain in the log files. File includes direct firmware/package installers;
+Configuration links to individual pages; Manage includes VFS/network/IPC;
+View includes category filters, icon sizes, toolbar and log visibility.
+
+This is **not full Qt tool parity**. Current Tools data-manager buttons still
+open storage folders rather than implement desktop user/save/trophy/patch/cheat
+managers. Boot-file and recent-history dialogs, batch cache actions, package
+integrity tools, archive extraction, memory/kernel/RSX debuggers, capture and
+savestate workflows, toy portals and database managers remain separate porting
+work. Adding their menu labels does not implement their operations. These UI
+changes do not change the graphics or audio backend policies.
+
+The configuration regression test validates 274 entries and the library/log
+editor data. Successful compilation does not validate visual layout or Xbox
+controller behavior; those require application testing.
+
 ## Embedded Vulkan / Mesa Dozen
+
+Version 1.0.0.80 makes the DXIL PSV wave-size contract use the wave size actually
+emitted into module metadata, instead of independently recomputing it from NIR.
+The cache UUID changes again. Validation failures no longer return a misleading
+host-memory exhaustion error; validation remains mandatory. Xbox verification
+is required to confirm the observed WaveSize=64/PSV0 mismatch is eliminated.
+
+Version 1.0.0.79 selects the existing DXIL 16-bit lowering passes directly from
+`Native16BitShaderOpsSupported`, including shaders without application-enabled
+16-bit Vulkan features. Internally generated unpacking/conversion operations
+must also respect this device capability. The pipeline-cache UUID policy is
+updated to avoid reusing shaders from the previous policy. This does not force
+FP16 support, strip requirement flags, or change FP64/INT64 capability reporting.
+Xbox game validation remains required; the failure diagnostics are retained.
+
+Version 1.0.0.78 records HRESULTs and returned values from the D3D12 OPTIONS,
+OPTIONS1 and OPTIONS4 queries for FP64, INT64, wave operations and native 16-bit
+shader operations. Look for `DZN: capability query` at initialization and
+`DZN: PSO capabilities` after a rejected pipeline. `valid=0` means the query
+failed: its returned boolean values are not valid capability evidence. This
+diagnostic does not force Vulkan features or change shader lowering policy.
+
+Version 1.0.0.77 adds a diagnostic-only `CreateGraphicsPipelineState` attempt,
+shader-model/SFI0 requirement extraction and retained root-signature metadata.
+The classic descriptor omits depth bounds, so compare its HRESULT against the
+stream trial with depth bounds disabled. Non-representable stream subobjects
+skip this comparison rather than silently changing additional state. Successful
+trial pipelines are released without binding or caching. Send the log lines
+`DZN: PSO classic`, `shader requirements`, and `root signature` after reproduction.
+
+Version 1.0.0.76 extends the failure-only Xbox PSO diagnostic with DXIL validation
+on private shader copies and two isolated pipeline-creation attempts: depth
+bounds disabled, and depth/stencil disabled. Trial pipelines are immediately
+released and never rendered or cached. Look for `DZN: DXIL diagnostic` and
+`DZN: PSO A/B` in `LocalState/rpcs3/RPCS3.log`. This is diagnostic evidence,
+not a rendering fix or a claim that Windows validation proves Xbox compatibility.
+
+Version 1.0.0.75 initializes disabled stencil operations/comparisons and unused
+blend attachments with valid D3D12 enum values instead of zero. This addresses
+invalid descriptors observed in the Xbox PSO diagnostic; confirmation on Xbox
+is still required. Failure-only diagnostics remain enabled.
+
+Version 1.0.0.74 adds failure-only diagnostics for rejected Mesa DZN dynamic
+graphics pipelines. The first four failures per process record the final D3D12
+pipeline descriptors, shader sizes/hashes, device removal status, and available
+debug-layer messages in `LocalState/rpcs3/RPCS3.log`. This diagnostic package
+does not claim to fix the Xbox pipeline rejection. Reproduce the failure and
+provide the log containing `DZN: PSO diagnostic` through `PSO diagnostic end`.
 
 Version 1.0.0.73 speeds up library recognition by removing the frontend's
 duplicate EBOOT search before the authoritative core scan. Brokered directory

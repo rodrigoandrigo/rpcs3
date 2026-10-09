@@ -514,7 +514,11 @@ void Emulator::Init()
 
 	// Not all renderers are known at compile time, so set a provided default if possible
 	ensure(m_supported_renderers.contains(m_default_renderer));
+#ifndef RPCS3_UWP_DZN
 	ensure(!(m_default_renderer == video_renderer::vulkan && m_default_graphics_adapter.empty()));
+#endif
+	// UWP DZN enumerates the packaged driver's adapters when the renderer is
+	// created; an empty adapter selects the first compatible device there.
 	g_cfg.video.renderer.set(m_default_renderer);
 	g_cfg.video.vk.adapter.set(m_default_graphics_adapter);
 

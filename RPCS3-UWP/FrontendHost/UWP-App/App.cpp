@@ -318,12 +318,11 @@ public:
 #ifdef RPCS3_HOST_WITH_CORE
 			m_coreDispatcher = m_window.Dispatcher();
 			rpcs3_core_callbacks callbacks{sizeof(callbacks), 2, this,
-				[](void* user, uint32_t level, uint64_t, const char*, const char* text)
+				[](void* user, uint32_t level, uint64_t timestamp, const char* channel, const char* text)
 				{
 					auto& app = *static_cast<App*>(user);
-					// The core persists every log independently. Keep a bounded UI tail.
-					if (app.m_coreLogTail.size() == 256) app.m_coreLogTail.erase(app.m_coreLogTail.begin());
-					app.m_coreLogTail.push_back(std::to_string(level) + ": " + text);
+					app.m_frontend.Host().AppendCoreLog(level, timestamp,
+						channel ? channel : "", text ? text : "");
 				},
 				[](void* user, uint32_t type, uint32_t command, int32_t result, const char* text)
 				{
@@ -674,7 +673,6 @@ private:
 	std::mutex m_panelSizeMutex;
 	std::optional<PanelSize> m_panelSize;
 #ifdef RPCS3_HOST_WITH_CORE
-	std::vector<std::string> m_coreLogTail;
 	UI::CoreDispatcher m_coreDispatcher{nullptr};
 	bool m_coreShutdownRequested = false;
 	bool m_coreReady = false;

@@ -154,6 +154,13 @@ namespace rpcs3::utils
 				return false;
 			}
 		}
+		const std::string flash = g_cfg_vfs.get_dev_flash();
+		if (!fs::is_file(flash + "sys/external/liblv2.sprx") ||
+			!fs::is_file(flash + "vsh/etc/version.txt"))
+		{
+			sys_log.error("Firmware extraction is incomplete: required files are missing from %s", flash);
+			return false;
+		}
 		Emu.Init();
 		sys_log.success("Firmware installation completed");
 		return true;

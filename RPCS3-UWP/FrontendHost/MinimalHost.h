@@ -29,6 +29,10 @@ public:
 	std::optional<ActiveStream> GetActiveStream() const override;
 	std::optional<std::string> TakeStreamFailure() override;
 	void Log(LogLevel level, std::string_view message) override;
+	void AppendCoreLog(std::uint32_t level, std::uint64_t timestamp,
+		std::string_view channel, std::string_view message);
+	void DrawLogPanel(bool tty) override;
+	void OpenSettingsPage(std::string_view page) override;
 
 	std::filesystem::path ResourceRoot() const override;
 	std::filesystem::path StateRoot() const override;
@@ -67,6 +71,15 @@ public:
 	void DrawOverlayPages();
 
 private:
+	struct LogRecord { std::uint32_t level; std::uint64_t timestamp; std::string channel, message; };
+	std::vector<LogRecord> m_logRecords;
+	std::vector<std::pair<std::string, bool>> m_firmwareLibraries;
+	std::array<char, 128> m_libraryFilter{};
+	std::array<char, 128> m_logFilter{};
+	int m_logLevel = 6;
+	bool m_logFollow = true;
+	std::string m_ttyText;
+	std::chrono::steady_clock::time_point m_ttyRefresh{};
 	void PersistInterfaceSettings();
 #ifdef RPCS3_HOST_WITH_CORE
 	struct CoreSetting
@@ -96,7 +109,6 @@ private:
 	void SetCoreSetting(const CoreSetting& setting, std::string value);
 	std::vector<CoreSetting> m_coreSettings;
 	std::unordered_map<std::string, std::vector<char>> m_coreSettingEditors;
-	std::array<char, 256> m_coreSettingsFilter{};
 	bool m_coreReady = false;
 	bool m_libraryLoading = false;
 	std::string m_gameMount;

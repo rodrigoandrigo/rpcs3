@@ -332,10 +332,11 @@ void ApplyShellStyle()
 	style.Colors[ImGuiCol_TextDisabled] = theme.textSecondary;
 	style.Colors[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);
 	style.Colors[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-	style.Colors[ImGuiCol_FrameBg] = WithAlpha(theme.panelBase, theme.dark ? 0.55f : 0.70f);
+	style.Colors[ImGuiCol_FrameBg] = ImVec4(0.23f, 0.24f, 0.27f, 0.94f);
 	style.Colors[ImGuiCol_FrameBgHovered] = WithAlpha(theme.cursorNormal, 0.22f);
 	style.Colors[ImGuiCol_FrameBgActive] = WithAlpha(theme.cursorNormal, 0.35f);
-	style.Colors[ImGuiCol_Button] = WithAlpha(theme.panelBase, theme.dark ? 0.55f : 0.70f);
+	style.Colors[ImGuiCol_Button] = ImVec4(0.23f, 0.24f, 0.27f, 0.94f);
+	style.Colors[ImGuiCol_Border] = theme.panelBorder;
 	style.Colors[ImGuiCol_ButtonHovered] = WithAlpha(theme.cursorNormal, 0.30f);
 	style.Colors[ImGuiCol_ButtonActive] = WithAlpha(theme.cursorNormal, 0.44f);
 	style.Colors[ImGuiCol_Header] = WithAlpha(theme.cursorNormal, 0.20f);

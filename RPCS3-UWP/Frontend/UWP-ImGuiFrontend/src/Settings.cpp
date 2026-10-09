@@ -36,16 +36,19 @@ std::vector<SplitViewTab> BuildSettingsTabs(const SettingsViewModel& model,
 {
 	std::vector<SplitViewTab> tabs;
 	tabs.reserve(4 + extensions.size());
-	AddTab(tabs, kInterfacePage, "Interface", model.showInterface);
-	AddTab(tabs, kCompanionPage, "DSU/Streaming", model.showCompanion);
-	AddTab(tabs, kStoragePage, "Storage", model.showStorage);
-	AddTab(tabs, kScreenScraperPage, "ScreenScraper", model.showScreenScraper);
 	for (const SettingsExtensionPage& extension : extensions)
 	{
+		if (extension.id == "rpcs3-Debug") AddTab(tabs, kInterfacePage, "GUI", model.showInterface);
 		if (!extension.id.empty())
 			tabs.push_back({ extension.id, extension.label, extension.enabled });
 	}
+	if (std::ranges::none_of(tabs, [](const auto& tab) { return tab.id == kInterfacePage; }))
+		AddTab(tabs, kInterfacePage, "GUI", model.showInterface);
+	AddTab(tabs, kCompanionPage, "DSU/Streaming", model.showCompanion);
+	AddTab(tabs, kStoragePage, "Storage", model.showStorage);
+	AddTab(tabs, kScreenScraperPage, "ScreenScraper", model.showScreenScraper);
 	return tabs;
+
 }
 
 void SettingsView::Draw(SettingsViewModel& model,
@@ -81,13 +84,29 @@ void SettingsView::Draw(SettingsViewModel& model,
 			return;
 		}
 		m_state.Select(static_cast<std::size_t>(enabled - tabs.begin()), tabs.size());
+		m_selectRequested = true;
+	}
+	if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+		const int direction = ImGui::IsKeyPressed(ImGuiKey_GamepadR1) ? 1 : ImGui::IsKeyPressed(ImGuiKey_GamepadL1) ? -1 : 0;
+		if (direction) {
+			for (std::size_t step = 1; step < tabs.size(); ++step) {
+				const auto next = static_cast<std::size_t>((static_cast<int>(m_state.selected) + direction * static_cast<int>(step) + static_cast<int>(tabs.size())) % static_cast<int>(tabs.size()));
+				if (tabs[next].enabled) { m_state.Select(next, tabs.size()); m_selectRequested = true; break; }
+			}
+		}
 	}
 	m_selectedPageId = tabs[m_state.selected].id;
 
-	DrawSplitView("reusable-settings", m_state, tabs,
-		[&](std::size_t index) {
-			if (index >= tabs.size())
-				return;
+	if (!ImGui::BeginTabBar("rpcs3-settings-tabs", ImGuiTabBarFlags_FittingPolicyScroll)) return;
+	const std::string requestedPage = m_selectedPageId;
+	for (std::size_t index = 0; index < tabs.size(); ++index)
+	{
+		ImGui::BeginDisabled(!tabs[index].enabled);
+		const bool open = ImGui::BeginTabItem(tabs[index].label.c_str(), nullptr,
+			m_selectRequested && tabs[index].id == requestedPage ? ImGuiTabItemFlags_SetSelected : 0);
+		ImGui::EndDisabled();
+		if (open) {
+			ImGui::BeginChild("settings-page", {0, 0}, false);
 			m_selectedPageId = tabs[index].id;
 			const std::string_view id = tabs[index].id;
 			if (id == kInterfacePage)
@@ -105,7 +124,12 @@ void SettingsView::Draw(SettingsViewModel& model,
 				if (extension != extensions.end() && extension->draw)
 					extension->draw();
 			}
-		}, size, options);
+			ImGui::EndChild();
+			ImGui::EndTabItem();
+		}
+	}
+	ImGui::EndTabBar();
+	m_selectRequested = false;
 }
 
 void SettingsView::SelectPage(std::string_view id,
@@ -120,6 +144,7 @@ void SettingsView::SelectPage(std::string_view id,
 	m_state.Select(static_cast<std::size_t>(selected - tabs.begin()), tabs.size());
 	m_state.RequestFocus(SplitPane::Navigation);
 	m_selectedPageId = selected->id;
+	m_selectRequested = true;
 }
 
 std::string_view SettingsView::SelectedPageId() const noexcept

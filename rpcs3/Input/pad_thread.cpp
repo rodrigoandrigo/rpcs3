@@ -156,6 +156,20 @@ void pad_thread::Init()
 
 	input_log.trace("Using pad config:\n%s", g_cfg_input);
 
+#if defined(RPCS3_UWP) && defined(HAVE_SDL3)
+	// The UWP frontend uses WGI, not desktop XInput. Null/desktop defaults
+	// otherwise leave every guest port disconnected despite a working UI pad.
+	for (usz i = 0; i < g_cfg_input.player.size(); ++i) {
+		auto* player = g_cfg_input.player[i];
+		if (player->handler != pad_handler::sdl) {
+			player->handler.set(pad_handler::sdl);
+			std::shared_ptr<PadHandlerBase> handler;
+			InitPadConfig(player->config, pad_handler::sdl, handler);
+		}
+		player->device.set(fmt::format("UWP Xbox #%u", i + 1));
+	}
+#endif
+
 #if !defined(ANDROID) && !defined(RPCS3_UWP)
 	std::shared_ptr<keyboard_pad_handler> keyptr;
 #endif

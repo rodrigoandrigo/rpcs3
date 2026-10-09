@@ -470,6 +470,11 @@ std::shared_ptr<PadDevice> sdl_pad_handler::get_device(const std::string& device
 	std::shared_ptr<SDLDevice> dev = std::make_unique<SDLDevice>();
 	dev->sdl.name = device;
 	dev->sdl.is_virtual_device = true;
+#ifdef RPCS3_UWP
+	constexpr std::string_view prefix = "UWP Xbox #";
+	if (device.starts_with(prefix) && device.size() == prefix.size() + 1 &&
+		device.back() >= '1' && device.back() <= '7') dev->uwp_slot = device.back() - '1';
+#endif
 	m_controllers.emplace(device, dev);
 	sdl_log.warning("Adding empty device: %s", device);
 
@@ -480,6 +485,21 @@ PadHandlerBase::connection sdl_pad_handler::update_connection(const std::shared_
 {
 	if (SDLDevice* dev = static_cast<SDLDevice*>(device.get()))
 	{
+#ifdef RPCS3_UWP
+		if (dev->uwp_slot >= 0) {
+			if (dev->sdl.gamepad && SDL_GamepadConnected(dev->sdl.gamepad))
+				return connection::connected; // WGI snapshots need no desktop event queue.
+			if (dev->sdl.gamepad) { SDL_CloseGamepad(dev->sdl.gamepad); dev->sdl.gamepad = nullptr; }
+			int count = 0;
+			SDL_JoystickID* pads = SDL_GetGamepads(&count);
+			if (pads && dev->uwp_slot < count) {
+				auto info = get_sdl_info(pads[dev->uwp_slot]);
+				if (info.gamepad) dev->sdl = std::move(info);
+			}
+			SDL_free(pads);
+			return dev->sdl.gamepad ? connection::connected : connection::disconnected;
+		}
+#endif
 		if (dev->sdl.gamepad)
 		{
 			if (SDL_GamepadConnected(dev->sdl.gamepad))

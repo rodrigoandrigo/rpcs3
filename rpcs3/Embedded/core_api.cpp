@@ -51,6 +51,7 @@
 #include <future>
 
 std::string g_input_config_override;
+extern const std::map<std::string_view, int> g_prx_list;
 atomic_t<bool> g_headless{false};
 cfg_input_configurations g_cfg_input_configs;
 mouse_config g_cfg_mouse;
@@ -185,6 +186,19 @@ namespace
 			default:
 				entry.type = RPCS3_CORE_CONFIG_COLLECTION;
 				entry.value = item->to_yaml();
+				// Structured editors receive entries, not an editable YAML document.
+				if (item->get_type() == cfg::type::set) {
+					for (const auto& value : item->to_list()) {
+						if (!entry.enum_values.empty()) entry.enum_values += '\x1f';
+						entry.enum_values += value;
+					}
+				}
+				else if (item->get_type() == cfg::type::log) {
+					for (const auto& [channel, level] : static_cast<const cfg::log_entry*>(item)->get_map()) {
+						if (!entry.enum_values.empty()) entry.enum_values += '\x1f';
+						entry.enum_values += channel + "\x1e" + fmt::format("%s", level);
+					}
+				}
 				if (defaults) for (const auto* child : defaults->get_nodes())
 					if (child->get_name() == item->get_name()) entry.default_value = child->to_yaml();
 				break;
@@ -210,6 +224,7 @@ namespace
 				entry.default_value = "OpenGL (Mesa Gallium D3D12)";
 				entry.enum_values = "Direct3D 12\x1fOpenGL (Mesa Gallium D3D12)";
 #ifdef RPCS3_UWP_DZN
+				entry.default_value = "Vulkan (Mesa Dozen D3D12)";
 				entry.enum_values += "\x1fVulkan (Mesa Dozen D3D12)";
 				if (g_cfg.video.renderer == video_renderer::vulkan) entry.value = "Vulkan (Mesa Dozen D3D12)";
 #endif
@@ -359,7 +374,8 @@ namespace
 		};
 		cb.on_run = [](bool) { state_changed(); };
 		cb.on_pause = cb.on_resume = cb.on_stop = cb.on_ready = state_changed;
-		cb.on_missing_fw = [] { if (auto host = runtime()) host->error("PS3 firmware is missing"); };
+		cb.on_missing_fw = [] { if (auto host = runtime()) host->error(
+			"PS3 firmware is missing or incomplete. Use File > Install PS3 firmware (.PUP) before starting the game."); };
 		cb.enable_disc_eject = cb.enable_disc_insert = [](bool) {};
 		cb.on_emulation_stop_no_response = [](std::shared_ptr<atomic_t<bool>> closed, int)
 		{
@@ -583,7 +599,11 @@ int32_t rpcs3_core_initialize(const char* state_root) try
 #else
 			Emu.SetSupportedRenderers({video_renderer::null, video_renderer::opengl});
 #endif
+#ifdef RPCS3_UWP_DZN
+			Emu.SetDefaultRenderer(video_renderer::vulkan);
+#else
 			Emu.SetDefaultRenderer(video_renderer::opengl);
+#endif
 #else
 			Emu.SetDefaultRenderer(video_renderer::null);
 #endif
@@ -806,8 +826,8 @@ static int32_t enumerate_games(const char* root, rpcs3_core_game_callback callba
 	scan.remove_duplicates();
 	for (const auto& game : scan.games())
 	{
-		fs::stat_t stat{};
-		const u64 size = game.is_iso_file ? (fs::get_stat(game.path, stat) ? stat.size : 0) : fs::get_dir_size(game.path);
+		// Recognition must not recursively traverse every file to calculate size.
+		const u64 size = 0;
 		std::vector<char> icon;
 		fs::file file;
 		if (game.icon_in_archive)
@@ -920,6 +940,17 @@ int32_t rpcs3_core_set_config(const char* path_utf8, const char* value_utf8) try
 }
 catch (...) { return RPCS3_CORE_INTERNAL_ERROR; }
 
+int32_t rpcs3_core_enumerate_libraries(rpcs3_core_library_callback callback, void* user) try
+{
+	if (!callback) return RPCS3_CORE_INVALID_ARGUMENT;
+	for (const auto& [name, hle] : g_prx_list) {
+		const std::string owned(name);
+		callback(user, owned.c_str(), hle != 0);
+	}
+	return RPCS3_CORE_OK;
+}
+catch (...) { return RPCS3_CORE_INTERNAL_ERROR; }
+
 int32_t rpcs3_core_reset_config(const char* prefix_utf8) try
 {
 	if (!prefix_utf8) return RPCS3_CORE_INVALID_ARGUMENT;
@@ -936,7 +967,11 @@ int32_t rpcs3_core_reset_config(const char* prefix_utf8) try
 		item->from_default();
 #ifdef RPCS3_UWP_MESA
 		if (prefix.empty() || prefix == "Video" || prefix == "Video/Renderer")
+#ifdef RPCS3_UWP_DZN
+			g_cfg.video.renderer.set(video_renderer::vulkan);
+#else
 			g_cfg.video.renderer.set(video_renderer::opengl);
+#endif
 #endif
 		normalize_host_settings();
 		if (!save_current_config())

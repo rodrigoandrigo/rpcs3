@@ -96,5 +96,6 @@ private:
 	ScreenScraperPanel m_screenScraperPanel;
 	CompanionPanel m_companionPanel;
 	std::string m_selectedPageId;
+	bool m_selectRequested = false;
 };
 }
