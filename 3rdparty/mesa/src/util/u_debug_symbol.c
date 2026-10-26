@@ -41,8 +41,7 @@
 #include "u_debug_symbol.h"
 #include "util/hash_table.h"
 
-
-#if defined DETECT_OS_WINDOWS && !defined _XBOX_UWP
+#if DETECT_OS_WINDOWS && !defined _XBOX_UWP
 
 #include <windows.h>
 #include <stddef.h>
@@ -238,7 +237,7 @@ debug_symbol_name_dbghelp(const void *addr, char* buf, unsigned size)
 void
 debug_symbol_name(const void *addr, char* buf, unsigned size)
 {
-#if defined DETECT_OS_WINDOWS && !defined _XBOX_UWP
+#if DETECT_OS_WINDOWS && !defined _XBOX_UWP
    if (debug_symbol_name_dbghelp(addr, buf, size)) {
       return;
    }

@@ -62,7 +62,10 @@ def remove_unsupported_casts(arr, bit_size, mask, max_unsigned_float, min_signed
                         new_seq = ('ishr', ('ishl', a, shift), shift)
                     # Make sure the destination is the right type/size
                     if outer_op_sz != src_sz or outer_op[2] != inner_op[0]:
-                        new_seq = (outer_op, new_seq)
+                        if outer_op_type == 'i2i' and outer_op_sz < src_sz:
+                            new_seq = ('u2u' + str(int(outer_op_sz)), new_seq)
+                        else:
+                            new_seq = (outer_op, new_seq)
                     arr += [(orig_seq, new_seq)]
             for inner_op_type in ('f2u', 'f2i'):
                 inner_op = inner_op_type + str(int(bit_size))

@@ -217,7 +217,8 @@ dxil_create_validator(const void *ctx)
     * fails.
     */
 #ifdef _XBOX_UWP
-   val->dxcompiler_mod = LoadPackagedLibrary(L"dxcompiler.dll", 0);
+   if (!GetModuleHandleExW(0, L"dxcompiler.dll", &val->dxcompiler_mod))
+      val->dxcompiler_mod = LoadPackagedLibrary(L"dxcompiler.dll", 0);
 #else
    val->dxcompiler_mod = LoadLibraryA("dxcompiler.dll");
 #endif

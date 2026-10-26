@@ -80,6 +80,7 @@ struct dxil_spirv_metadata {
    // buffer, and therefore piping them to the runtime data buffer is extra
    // complex.
    bool needs_draw_sysvals;
+   bool lowered_large_points;
 };
 
 struct dxil_spirv_object {
@@ -110,6 +111,8 @@ struct dxil_spirv_compute_runtime_data {
 
 /* This struct describes the layout of data expected in the CB bound to
  * runtime_data_cbv during vertex stages */
+#define DXIL_SPIRV_MAX_VIEWPORT 16
+
 struct dxil_spirv_vertex_runtime_data {
    uint32_t first_vertex;
    uint32_t base_instance;
@@ -139,6 +142,8 @@ struct dxil_spirv_vertex_runtime_data {
    uint32_t point_depth_bias_enable;
    uint32_t provoking_vertex_index;
    uint32_t provoking_strip;
+   /* Width/height for the viewport selected by SV_ViewportArrayIndex. */
+   float viewport_sizes[DXIL_SPIRV_MAX_VIEWPORT][2];
 };
 
 enum dxil_spirv_yz_flip_mode {
@@ -152,9 +157,9 @@ enum dxil_spirv_yz_flip_mode {
    DXIL_SPIRV_Y_FLIP_CONDITIONAL = 1 << 2,
    DXIL_SPIRV_Z_FLIP_CONDITIONAL = 1 << 3,
    DXIL_SPIRV_YZ_FLIP_CONDITIONAL = DXIL_SPIRV_Y_FLIP_CONDITIONAL | DXIL_SPIRV_Z_FLIP_CONDITIONAL,
+   // X-flip is unconditional: pos.x = -pos.x, used for mirrored viewports.
+   DXIL_SPIRV_X_FLIP_UNCONDITIONAL = 1 << 4,
 };
-
-#define DXIL_SPIRV_MAX_VIEWPORT 16
 
 enum dxil_spirv_sysval_type {
    // The sysval can be inlined in the shader as a constant zero
@@ -167,8 +172,14 @@ enum dxil_spirv_sysval_type {
 };
 
 struct dxil_spirv_runtime_conf {
-   /* D3D12 fixed-size point rasterization (largePoints is not exposed). */
+   /* Keep native size-one rasterization, or expand point output in NIR. */
    bool fixed_point_size;
+   /* Keep PointSize as ordinary stage IO until the pipeline has linked all
+    * pre-raster stages. In particular, TCS output readback is shader data,
+    * even when the rasterizer only supports size 1. */
+   bool preserve_point_size;
+   /* PointCoord is already emitted by the point-expansion geometry shader. */
+   bool direct_point_coord;
    struct {
       uint32_t register_space;
       uint32_t base_shader_register;
@@ -212,6 +223,16 @@ struct dxil_spirv_runtime_conf {
 
    // Reserve generic IO locations when stages are compiled independently.
    uint32_t preserve_generic_io_location_count;
+   bool split_viewport_sizes;
+   bool link_tessellation;
+   uint32_t tessellation_domain;
+   uint32_t tessellation_spacing;
+   uint32_t tessellation_input_control_points;
+   uint32_t tessellation_output_control_points;
+   bool tessellation_ccw;
+   bool tessellation_point_mode;
+   const uint32_t *tessellation_peer_words;
+   size_t tessellation_peer_word_count;
 };
 
 struct dxil_spirv_debug_options {
@@ -256,6 +277,9 @@ spirv_to_dxil_free(struct dxil_spirv_object *dxil);
 
 uint64_t
 spirv_to_dxil_get_version(void);
+
+size_t
+spirv_to_dxil_get_runtime_conf_size(void);
 
 #ifdef __cplusplus
 }

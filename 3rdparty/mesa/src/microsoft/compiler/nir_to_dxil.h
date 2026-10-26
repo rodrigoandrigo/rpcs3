@@ -84,6 +84,7 @@ struct nir_to_dxil_options {
    unsigned provoking_vertex;
    unsigned num_kernel_globals;
    unsigned input_clip_size;
+   unsigned tessellation_input_control_points;
    enum dxil_environment environment;
    enum dxil_shader_model shader_model_max;
    enum dxil_validator_version validator_version_max;

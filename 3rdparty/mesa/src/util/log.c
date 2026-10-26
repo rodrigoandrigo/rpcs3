@@ -120,6 +120,8 @@ mesa_log_init_once(void)
       /* pick the default loggers */
 #if DETECT_OS_ANDROID
       mesa_log_control |= MESA_LOG_CONTROL_ANDROID;
+#elif defined(_XBOX_UWP)
+      mesa_log_control |= MESA_LOG_CONTROL_WINDBG;
 #else
       mesa_log_control |= MESA_LOG_CONTROL_FILE;
 #endif
@@ -412,7 +414,11 @@ logger_windbg(enum mesa_log_level level,
          LOGGER_VASNPRINTF_AFFIX_NEWLINE,
          level, tag, format, va);
 
+#ifdef _XBOX_UWP
+   debug_printf("%s", msg);
+#else
    OutputDebugStringA(msg);
+#endif
 
    if (msg != local_msg)
       free(msg);

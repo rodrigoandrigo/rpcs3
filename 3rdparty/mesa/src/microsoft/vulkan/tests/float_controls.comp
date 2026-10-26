@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: MIT */
+#version 450
+#extension GL_EXT_spirv_intrinsics : require
+spirv_execution_mode(MODE, 32);
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) buffer Data { uint values[]; } data;
+void main()
+{
+   /* Load operands from memory so constant folding cannot replace the test. */
+   precise float a = uintBitsToFloat(data.values[0]);
+   precise float b = uintBitsToFloat(data.values[1]);
+   precise float product = a * b;
+   precise float sum = a + b;
+   data.values[2] = floatBitsToUint(product);
+   data.values[3] = floatBitsToUint(sum);
+}

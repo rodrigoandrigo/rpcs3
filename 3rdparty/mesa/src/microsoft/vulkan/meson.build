@@ -93,7 +93,7 @@ icd_file_name = libname_prefix + 'vulkan_dzn.' + libname_suffix
 
 icd_command = [
    prog_python, '@INPUT0@',
-   '--api-version', '1.1', '--xml', '@INPUT1@',
+   '--api-version', '1.3', '--xml', '@INPUT1@',
    '--sizeof-pointer', sizeof_pointer,
    '--icd-lib-path', vulkan_icd_lib_path,
    '--icd-filename', icd_file_name,
@@ -102,7 +102,7 @@ icd_command = [
 
 icd_dev_command = [
    prog_python, '@INPUT0@',
-   '--api-version', '1.1', '--xml', '@INPUT1@',
+   '--api-version', '1.3', '--xml', '@INPUT1@',
    '--sizeof-pointer', sizeof_pointer,
    '--icd-lib-path', meson.current_build_dir(),
    '--icd-filename', icd_file_name,
@@ -135,3 +135,63 @@ _dev_icd = custom_target(
 )
 
 devenv.append('VK_DRIVER_FILES', _dev_icd.full_path())
+
+if with_tests and with_platform_windows and prog_glslang.found()
+  large_point_shaders = []
+  foreach stage : ['vert', 'frag']
+    large_point_shaders += custom_target('large_points_' + stage,
+      input : 'tests/large_points.' + stage,
+      output : 'large_points.' + stage + '.spv',
+      command : [prog_glslang, '-V', '--target-env', 'vulkan1.2', '@INPUT@', '-o', '@OUTPUT@'])
+  endforeach
+  large_points_test = executable('dzn_large_points_test',
+    'tests/large_points_test.cpp', include_directories : inc_include)
+  test('dzn_large_points', large_points_test,
+       args : [libvulkan_dzn.full_path()] + large_point_shaders,
+       depends : libvulkan_dzn, suite : 'dzn', timeout : 120)
+  float_control_shaders = []
+  foreach mode : [4459, 4460, 4462]
+    float_control_shaders += custom_target(
+      'float_controls_' + mode.to_string(),
+      input : 'tests/float_controls.comp',
+      output : 'float_controls_' + mode.to_string() + '.spv',
+      command : [prog_glslang, '-V', '--target-env', 'vulkan1.2',
+                 '-DMODE=' + mode.to_string(), '@INPUT@', '-o', '@OUTPUT@'],
+    )
+  endforeach
+  float_controls_test = executable('dzn_float_controls_test',
+    'tests/float_controls_test.cpp', include_directories : inc_include)
+  test('dzn_float_controls', float_controls_test,
+       args : [libvulkan_dzn.full_path()] + float_control_shaders,
+       depends : libvulkan_dzn, suite : 'dzn', timeout : 120)
+  point_test_shaders = []
+  foreach stage : ['vert', 'tesc', 'geom', 'frag']
+    point_test_shaders += custom_target(
+      'point_size_' + stage,
+      input : 'tests/point_size.' + stage,
+      output : 'point_size.' + stage + '.spv',
+      command : [prog_glslang, '-V', '--target-env', 'vulkan1.2', '@INPUT@', '-o', '@OUTPUT@'],
+    )
+  endforeach
+  foreach domain : ['triangles', 'quads', 'isolines']
+    foreach spacing : ['equal_spacing', 'fractional_even_spacing', 'fractional_odd_spacing']
+      foreach point_mode : [false, true]
+        point_test_shaders += custom_target(
+          'point_size_tes_' + domain + spacing + point_mode.to_string(),
+          input : 'tests/point_size.tese',
+          output : 'point_size_' + domain + spacing + point_mode.to_string() + '.tese.spv',
+          command : [prog_glslang, '-V', '--target-env', 'vulkan1.2',
+                     '-DDOMAIN=' + domain, '-DSPACING=' + spacing] +
+                    (point_mode ? ['-DPOINT_MODE=1'] : []) +
+                    ['@INPUT@', '-o', '@OUTPUT@'],
+        )
+      endforeach
+    endforeach
+  endforeach
+  point_pipeline_test = executable('dzn_point_size_pipeline_test',
+    'tests/point_size_pipeline_test.cpp', include_directories : inc_include)
+  test('dzn_point_size_pipelines', point_pipeline_test,
+       args : [libvulkan_dzn.full_path()] + point_test_shaders,
+       depends : libvulkan_dzn,
+       suite : 'dzn', timeout : 120)
+endif

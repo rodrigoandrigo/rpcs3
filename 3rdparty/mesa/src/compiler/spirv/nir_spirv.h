@@ -64,6 +64,7 @@ struct spirv_to_nir_options {
 
    /* These really early AMD extensions don't have capabilities */
    bool amd_gcn_shader;
+   bool lower_amd_gcn_shader_clock;
    bool amd_shader_ballot;
    bool amd_trinary_minmax;
    bool amd_shader_explicit_vertex_parameter;

@@ -32,6 +32,9 @@
 extern "C" {
 #endif
 
+bool dxil_nir_lower_amd_cube(nir_shader *shader);
+bool dxil_nir_lower_amd_clock(nir_shader *shader);
+
 bool dxil_nir_lower_8bit_conv(nir_shader *shader);
 bool dxil_nir_lower_16bit_conv(nir_shader *shader);
 bool dxil_nir_algebraic(nir_shader *shader);

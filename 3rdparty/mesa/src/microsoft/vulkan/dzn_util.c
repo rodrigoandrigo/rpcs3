@@ -383,14 +383,15 @@ d3d12_create_device(struct util_dl_library *d3d12_mod, IUnknown *adapter, ID3D12
       }
    }
 
-   ID3D12Device4 *dev;
+   ID3D12Device4 *dev = NULL;
    if (factory) {
       ID3D12DeviceFactory_SetFlags(factory, D3D12_DEVICE_FACTORY_FLAG_ALLOW_RETURNING_EXISTING_DEVICE |
                                             D3D12_DEVICE_FACTORY_FLAG_ALLOW_RETURNING_INCOMPATIBLE_EXISTING_DEVICE);
-      if (FAILED(ID3D12DeviceFactory_CreateDevice(factory, adapter, D3D_FEATURE_LEVEL_11_0,
-                                                  &IID_ID3D12Device4,
-                                                  (void **)&dev))) {
-         mesa_loge("ID3D12DeviceFactory::CreateDevice failed\n");
+      HRESULT result = ID3D12DeviceFactory_CreateDevice(factory, adapter, D3D_FEATURE_LEVEL_11_0,
+                                                        &IID_ID3D12Device4, (void **)&dev);
+      if (FAILED(result)) {
+         mesa_loge("ID3D12DeviceFactory::CreateDevice failed: HRESULT=0x%08x\n",
+                   (unsigned)result);
          return NULL;
       }
    } else {
@@ -403,12 +404,18 @@ d3d12_create_device(struct util_dl_library *d3d12_mod, IUnknown *adapter, ID3D12
          return NULL;
       }
 
-      if (FAILED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0,
-                                   &IID_ID3D12Device4,
-                                   (void **)&dev))) {
-         mesa_loge("D3D12CreateDevice failed\n");
+      HRESULT result = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0,
+                                         &IID_ID3D12Device4, (void **)&dev);
+      if (FAILED(result)) {
+         mesa_loge("D3D12CreateDevice failed: HRESULT=0x%08x\n", (unsigned)result);
          return NULL;
       }
+   }
+   HRESULT removed_reason = ID3D12Device4_GetDeviceRemovedReason(dev);
+   if (FAILED(removed_reason)) {
+      mesa_loge("D3D12 device is not usable: HRESULT=0x%08x\n", (unsigned)removed_reason);
+      ID3D12Device4_Release(dev);
+      return NULL;
    }
    return dev;
 }

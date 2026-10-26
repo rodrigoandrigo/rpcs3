@@ -47,6 +47,9 @@ idep_libdxil_compiler = declare_dependency(
 )
 
 if with_tests
+  test('dxil_atomic', executable('dxil_atomic_test',
+       files('dxil_atomic_test.c'), include_directories : [inc_src],
+       dependencies : [idep_libdxil_compiler, idep_nir]), suite : 'd3d12')
   test(
     'dxil_buffer',
     executable(

@@ -29,6 +29,7 @@
 
 #include "util/macros.h"
 #include "util/os_time.h"
+#include "util/u_debug.h"
 
 #ifndef _WIN32
 #include <sys/eventfd.h>
@@ -46,11 +47,17 @@ dzn_sync_init(struct vk_device *device,
    D3D12_FENCE_FLAGS flags = (sync->flags & VK_SYNC_IS_SHAREABLE) ?
       D3D12_FENCE_FLAG_SHARED : D3D12_FENCE_FLAG_NONE;
 
-   if (FAILED(ID3D12Device1_CreateFence(ddev->dev, initial_value,
-                                        flags,
-                                        &IID_ID3D12Fence,
-                                        (void **)&dsync->fence)))
-      return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   const HRESULT hr = ID3D12Device1_CreateFence(ddev->dev, initial_value,
+                                               flags, &IID_ID3D12Fence,
+                                               (void **)&dsync->fence);
+   if (FAILED(hr)) {
+      const HRESULT reason = ID3D12Device_GetDeviceRemovedReason(ddev->dev);
+      debug_printf("DZN: CreateFence failed: HRESULT=0x%08lx, flags=0x%x, device=0x%08lx\n",
+                   (unsigned long)hr, (unsigned)flags, (unsigned long)reason);
+      return vk_errorf(device, FAILED(reason) ? VK_ERROR_DEVICE_LOST : VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                       "CreateFence failed: HRESULT=0x%08lx, flags=0x%x, device=0x%08lx",
+                       (unsigned long)hr, (unsigned)flags, (unsigned long)reason);
+   }
 
    return VK_SUCCESS;
 }

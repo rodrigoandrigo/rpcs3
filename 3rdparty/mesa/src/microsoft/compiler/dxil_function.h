@@ -45,6 +45,7 @@
 #define DXIL_FUNC_PARAM_RES_BIND '#'
 #define DXIL_FUNC_PARAM_RES_PROPS 'P'
 #define DXIL_FUNC_PARAM_FOURI32 'F'
+#define DXIL_FUNC_PARAM_TWOI32 'J'
 
 #include "dxil_module.h"
 #include "util/rb_tree.h"

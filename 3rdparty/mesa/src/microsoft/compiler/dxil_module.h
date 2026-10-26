@@ -350,6 +350,9 @@ const struct dxil_type *
 dxil_module_get_fouri32_type(struct dxil_module *m);
 
 const struct dxil_type *
+dxil_module_get_twoi32_type(struct dxil_module *m);
+
+const struct dxil_type *
 dxil_module_get_struct_type(struct dxil_module *m,
                             const char *name,
                             const struct dxil_type **elem_types,
@@ -454,7 +457,8 @@ dxil_module_get_uav_res_props_const(struct dxil_module *m,
 const struct dxil_value *
 dxil_module_get_buffer_res_props_const(struct dxil_module *m,
                                        enum dxil_resource_class class,
-                                       enum dxil_resource_kind kind);
+                                       enum dxil_resource_kind kind,
+                                       bool globally_coherent);
 
 const struct dxil_mdnode *
 dxil_get_metadata_string(struct dxil_module *m, const char *str);

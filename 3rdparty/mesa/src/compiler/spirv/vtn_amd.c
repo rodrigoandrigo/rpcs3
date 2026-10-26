@@ -19,12 +19,13 @@ vtn_handle_amd_gcn_shader_instruction(struct vtn_builder *b, SpvOp ext_opcode,
    case CubeFaceCoordAMD: {
       def = nir_cube_amd(&b->nb, vtn_get_nir_ssa(b, w[5]));
       nir_def *st = nir_swizzle(&b->nb, def, (unsigned[]){1, 0}, 2);
-      nir_def *invma = nir_frcp(&b->nb, nir_channel(&b->nb, def, 2));
+      nir_def *invma = nir_frcp(&b->nb, nir_fabs(&b->nb, nir_channel(&b->nb, def, 2)));
       def = nir_ffma_weak_imm2(&b->nb, st, invma, 0.5);
       break;
    }
    case TimeAMD: {
-      def = nir_pack_64_2x32(&b->nb, nir_shader_clock(&b->nb, SCOPE_SUBGROUP));
+      mesa_scope scope = b->options->lower_amd_gcn_shader_clock ? SCOPE_INVOCATION : SCOPE_SUBGROUP;
+      def = nir_pack_64_2x32(&b->nb, nir_shader_clock(&b->nb, scope));
       break;
    }
    default:

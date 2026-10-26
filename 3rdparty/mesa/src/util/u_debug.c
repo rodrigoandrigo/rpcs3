@@ -42,12 +42,18 @@
 
 static void (*mesa_uwp_log_callback)(void *opaque, const char *message);
 static void *mesa_uwp_log_opaque;
+static once_flag mesa_uwp_log_once = ONCE_FLAG_INIT;
+static mtx_t mesa_uwp_log_mutex;
+static void mesa_uwp_log_init(void) { mtx_init(&mesa_uwp_log_mutex, mtx_plain); }
 
 MESA_UWP_EXPORT void
 mesa_uwp_set_log_callback(void (*callback)(void *, const char *), void *opaque)
 {
+   call_once(&mesa_uwp_log_once, mesa_uwp_log_init);
+   mtx_lock(&mesa_uwp_log_mutex);
    mesa_uwp_log_callback = callback;
    mesa_uwp_log_opaque = opaque;
+   mtx_unlock(&mesa_uwp_log_mutex);
 }
 #endif
 
@@ -60,15 +66,20 @@ mesa_uwp_set_log_callback(void (*callback)(void *, const char *), void *opaque)
 void
 _debug_vprintf(const char *format, va_list ap)
 {
-   static char buf[4096] = {'\0'};
+   static thread_local char buf[4096] = {'\0'};
 #if DETECT_OS_WINDOWS
    /* We buffer until we find a newline. */
    size_t len = strlen(buf);
    int ret = vsnprintf(buf + len, sizeof(buf) - len, format, ap);
    if (ret > (int)(sizeof(buf) - len - 1) || strchr(buf + len, '\n')) {
 #ifdef _XBOX_UWP
-      if (mesa_uwp_log_callback)
-         mesa_uwp_log_callback(mesa_uwp_log_opaque, buf);
+      call_once(&mesa_uwp_log_once, mesa_uwp_log_init);
+      mtx_lock(&mesa_uwp_log_mutex);
+      void (*callback)(void *, const char *) = mesa_uwp_log_callback;
+      void *opaque = mesa_uwp_log_opaque;
+      mtx_unlock(&mesa_uwp_log_mutex);
+      if (callback)
+         callback(opaque, buf);
 #endif
       os_log_message(buf);
       buf[0] = '\0';

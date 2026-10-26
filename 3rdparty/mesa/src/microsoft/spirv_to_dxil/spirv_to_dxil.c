@@ -61,6 +61,7 @@ spirv_to_dxil(const uint32_t *words, size_t word_count,
       .environment = DXIL_ENVIRONMENT_VULKAN,
       .shader_model_max = conf->shader_model_max,
       .validator_version_max = validator_version_max,
+      .tessellation_input_control_points = conf->tessellation_input_control_points,
    };
 
    const struct spirv_to_nir_options *spirv_opts = dxil_spirv_nir_get_spirv_options();
@@ -90,12 +91,61 @@ spirv_to_dxil(const uint32_t *words, size_t word_count,
       return false;
    }
 
+   if (conf->link_tessellation &&
+       (stage == DXIL_SPIRV_SHADER_TESS_CTRL || stage == DXIL_SPIRV_SHADER_TESS_EVAL)) {
+      if (conf->tessellation_domain < TESS_PRIMITIVE_TRIANGLES ||
+          conf->tessellation_domain > TESS_PRIMITIVE_ISOLINES ||
+          conf->tessellation_spacing < TESS_SPACING_EQUAL ||
+          conf->tessellation_spacing > TESS_SPACING_FRACTIONAL_EVEN ||
+          !conf->tessellation_input_control_points || conf->tessellation_input_control_points > 32 ||
+          !conf->tessellation_output_control_points || conf->tessellation_output_control_points > 32) {
+         ralloc_free(nir);
+         glsl_type_singleton_decref();
+         return false;
+      }
+      nir->info.tess._primitive_mode = conf->tessellation_domain;
+      nir->info.tess.spacing = conf->tessellation_spacing;
+      nir->info.tess.ccw = conf->tessellation_ccw;
+      nir->info.tess.point_mode = conf->tessellation_point_mode;
+      nir->info.tess.tcs_vertices_out = conf->tessellation_output_control_points;
+   }
+
    nir_validate_shader(nir,
                        "Validate before feeding NIR to the DXIL compiler");
 
    dxil_spirv_nir_prep(nir);
 
    dxil_spirv_nir_passes(nir, conf, &out_dxil->metadata);
+
+   if (conf->link_tessellation) {
+      if (!conf->tessellation_peer_words || !conf->tessellation_peer_word_count) {
+         ralloc_free(nir);
+         glsl_type_singleton_decref();
+         return false;
+      }
+      const mesa_shader_stage peer_stage = stage == DXIL_SPIRV_SHADER_TESS_CTRL ?
+         MESA_SHADER_TESS_EVAL : MESA_SHADER_TESS_CTRL;
+      nir_shader *peer = spirv_to_nir(conf->tessellation_peer_words,
+         conf->tessellation_peer_word_count, NULL, peer_stage, entry_point_name,
+         spirv_opts, &nir_options);
+      if (!peer) {
+         ralloc_free(nir);
+         glsl_type_singleton_decref();
+         return false;
+      }
+      peer->info.tess = nir->info.tess;
+      struct dxil_spirv_runtime_conf peer_conf = *conf;
+      peer_conf.yz_flip.mode = DXIL_SPIRV_YZ_FLIP_NONE;
+      struct dxil_spirv_metadata peer_metadata = {0};
+      dxil_spirv_nir_prep(peer);
+      dxil_spirv_nir_passes(peer, &peer_conf, &peer_metadata);
+      struct dxil_spirv_metadata link_metadata = {0};
+      nir_shader *tes = stage == DXIL_SPIRV_SHADER_TESS_EVAL ? nir : peer;
+      nir_shader *tcs = stage == DXIL_SPIRV_SHADER_TESS_CTRL ? nir : peer;
+      dxil_spirv_nir_link(tes, tcs, conf, &link_metadata);
+      out_dxil->metadata.requires_runtime_data |= link_metadata.requires_runtime_data;
+      ralloc_free(peer);
+   }
 
    if (dgb_opts->dump_nir)
       nir_print_shader(nir, stderr);
@@ -124,6 +174,12 @@ void
 spirv_to_dxil_free(struct dxil_spirv_object *dxil)
 {
    free(dxil->binary.buffer);
+}
+
+size_t
+spirv_to_dxil_get_runtime_conf_size(void)
+{
+   return sizeof(struct dxil_spirv_runtime_conf);
 }
 
 uint64_t

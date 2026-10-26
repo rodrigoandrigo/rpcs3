@@ -1,0 +1,16 @@
+#version 460
+#extension GL_EXT_shader_image_int64 : require
+#extension GL_ARB_gpu_shader_int64 : require
+
+layout(local_size_x = 8) in;
+layout(set = 0, binding = 0, r64ui) uniform u64image2D target_image;
+layout(set = 0, binding = 1, std430) buffer Results {
+   uint64_t previous[8];
+} results;
+
+void main()
+{
+   uint index = gl_LocalInvocationIndex;
+   uint64_t value = uint64_t(index + 1);
+   results.previous[index] = imageAtomicAdd(target_image, ivec2(0), value);
+}

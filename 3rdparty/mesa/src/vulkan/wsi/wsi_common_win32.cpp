@@ -31,6 +31,7 @@
 #include "util/timespec.h"
 #include "util/u_thread.h"
 #include "util/os_time.h"
+#include "util/log.h"
 #include "util/uwp_util.h"
 #include "vk_format.h"
 #include "vk_instance.h"
@@ -1177,19 +1178,20 @@ wsi_win32_surface_create_swapchain_dxgi(
    if (image_usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
       desc.BufferUsage |= DXGI_USAGE_RENDER_TARGET_OUTPUT;
 
-   IDXGISwapChain1 *swapchain1;
-#ifndef _XBOX_UWP
-   if (FAILED(factory->CreateSwapChainForComposition(queue, &desc, NULL, &swapchain1)) ||
-       FAILED(swapchain1->QueryInterface(&chain->dxgi)))
+   IDXGISwapChain1 *swapchain1 = nullptr;
+   HRESULT result = factory->CreateSwapChainForComposition(queue, &desc, NULL, &swapchain1);
+   if (FAILED(result)) {
+      mesa_loge("CreateSwapChainForComposition failed: HRESULT 0x%08lx, extent %ux%u, buffers %u, flags 0x%x",
+                (unsigned long)result, desc.Width, desc.Height, desc.BufferCount, desc.Flags);
       return VK_ERROR_INITIALIZATION_FAILED;
-#else
-   if (FAILED(factory->CreateSwapChainForComposition(queue, &desc, NULL,
-                                                      &swapchain1)) ||
-       FAILED(swapchain1->QueryInterface(&chain->dxgi)))
-      return VK_ERROR_INITIALIZATION_FAILED;
-#endif
+   }
 
+   result = swapchain1->QueryInterface(&chain->dxgi);
    swapchain1->Release();
+   if (FAILED(result)) {
+      mesa_loge("Swapchain QueryInterface failed: HRESULT 0x%08lx", (unsigned long)result);
+      return VK_ERROR_INITIALIZATION_FAILED;
+   }
    if (chain->base.present_wait_enabled) {
       if (FAILED(chain->dxgi->SetMaximumFrameLatency(1)))
          return VK_ERROR_INITIALIZATION_FAILED;
@@ -1213,6 +1215,7 @@ wsi_win32_surface_create_swapchain_dxgi(
 #else
    HRESULT attach_result = mesa_uwp_attach_swapchain(chain->dxgi);
    if (FAILED(attach_result)) {
+      mesa_loge("UWP swapchain attachment failed: HRESULT 0x%08lx", (unsigned long)attach_result);
       chain->dxgi->Release();
       chain->dxgi = nullptr;
       return VK_ERROR_INITIALIZATION_FAILED;

@@ -296,6 +296,76 @@ out:
    return ret;
 }
 
+static void
+dzn_meta_query_reduce_finish(struct dzn_device *device)
+{
+   struct dzn_meta_large_point_draw_args *meta = &device->query_reduce;
+   if (meta->root_sig) {
+      ID3D12RootSignature_Release(meta->root_sig);
+      meta->root_sig = NULL;
+   }
+   if (meta->pipeline_state) {
+      ID3D12PipelineState_Release(meta->pipeline_state);
+      meta->pipeline_state = NULL;
+   }
+}
+
+static VkResult
+dzn_meta_query_reduce_init(struct dzn_device *device)
+{
+   struct dzn_instance *instance =
+      container_of(device->vk.physical->instance, struct dzn_instance, vk);
+   struct dzn_meta_large_point_draw_args *meta = &device->query_reduce;
+   D3D12_ROOT_PARAMETER1 params[3] = {
+      {
+         .ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+         .Constants = { .ShaderRegister = 0, .Num32BitValues = 2 },
+         .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
+      },
+      {
+         .ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV,
+         .Descriptor = { .ShaderRegister = 1, .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE },
+         .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
+      },
+      {
+         .ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV,
+         .Descriptor = { .ShaderRegister = 2, .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE },
+         .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
+      },
+   };
+   D3D12_VERSIONED_ROOT_SIGNATURE_DESC root_desc = {
+      .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
+      .Desc_1_1 = {
+         .NumParameters = ARRAY_SIZE(params),
+         .pParameters = params,
+      },
+   };
+   D3D12_COMPUTE_PIPELINE_STATE_DESC desc = { 0 };
+   VkResult ret = VK_SUCCESS;
+
+   glsl_type_singleton_init_or_ref();
+   nir_shader *nir = dzn_nir_query_reduce_shader();
+   meta->root_sig = dzn_device_create_root_sig(device, &root_desc);
+   if (!meta->root_sig) {
+      ret = vk_error(instance, VK_ERROR_INITIALIZATION_FAILED);
+      goto out;
+   }
+   desc.pRootSignature = meta->root_sig;
+   dzn_meta_compile_shader(device, nir, &desc.CS);
+   if (FAILED(ID3D12Device1_CreateComputePipelineState(
+          device->dev, &desc, &IID_ID3D12PipelineState,
+          (void **)&meta->pipeline_state)))
+      ret = vk_error(instance, VK_ERROR_INITIALIZATION_FAILED);
+
+out:
+   if (ret != VK_SUCCESS)
+      dzn_meta_query_reduce_finish(device);
+   free((void *)desc.CS.pShaderBytecode);
+   ralloc_free(nir);
+   glsl_type_singleton_decref();
+   return ret;
+}
+
 #define DZN_META_TRIANGLE_FAN_REWRITE_IDX_MAX_PARAM_COUNT 4
 
 static void
@@ -680,8 +750,7 @@ dzn_meta_blit_create(struct dzn_device *device, const struct dzn_meta_blit_key *
    };
    uint32_t num_root_params = 2;
 
-   uint32_t samples = key->resolve_mode == dzn_blit_resolve_none ?
-      key->samples : 1;
+   uint32_t samples = 1u << key->dst_samples_log2;
    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {
       .SampleMask = (1ULL << samples) - 1,
       .RasterizerState = {
@@ -698,7 +767,7 @@ dzn_meta_blit_create(struct dzn_device *device, const struct dzn_meta_blit_key *
    };
 
    struct dzn_nir_blit_info blit_fs_info = {
-      .src_samples = key->samples,
+      .src_samples = 1u << key->src_samples_log2,
       .loc = key->loc,
       .out_type = key->out_type,
       .sampler_dim = key->sampler_dim,
@@ -885,6 +954,7 @@ void
 dzn_meta_finish(struct dzn_device *device)
 {
    dzn_meta_large_point_draw_args_finish(device);
+   dzn_meta_query_reduce_finish(device);
    for (uint32_t i = 0; i < ARRAY_SIZE(device->triangle_fan); i++)
       dzn_meta_triangle_fan_rewrite_index_finish(device, i);
 
@@ -899,6 +969,10 @@ dzn_meta_init(struct dzn_device *device)
 {
    struct dzn_physical_device *pdev = container_of(device->vk.physical, struct dzn_physical_device, vk);
    VkResult result = dzn_meta_blits_init(device);
+   if (result != VK_SUCCESS)
+      goto out;
+
+   result = dzn_meta_query_reduce_init(device);
    if (result != VK_SUCCESS)
       goto out;
 

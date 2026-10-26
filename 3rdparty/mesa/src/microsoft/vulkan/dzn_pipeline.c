@@ -220,36 +220,30 @@ struct dzn_nir_options {
    bool lower_clip_halfz;
    bool lower_view_index;
    bool lower_view_index_to_rt_layer;
+   bool lower_large_points;
+   unsigned patch_vertices;
    enum pipe_format *vi_conversions;
    const nir_shader_compiler_options *nir_opts;
 };
 
 static bool
-dzn_robust_image_access_intrinsic_filter(const nir_intrinsic_instr *intr,
-                                         const void *data)
+dzn_device_lowers_16bit(const struct dzn_device *device)
 {
-   (void)data;
-   switch (intr->intrinsic) {
-   case nir_intrinsic_image_load:
-   case nir_intrinsic_bindless_image_load:
-   case nir_intrinsic_image_store:
-   case nir_intrinsic_bindless_image_store:
-   case nir_intrinsic_image_atomic:
-   case nir_intrinsic_bindless_image_atomic:
-   case nir_intrinsic_image_atomic_swap:
-   case nir_intrinsic_bindless_image_atomic_swap:
-   case nir_intrinsic_image_deref_load:
-   case nir_intrinsic_image_deref_store:
-   case nir_intrinsic_image_deref_atomic:
-   case nir_intrinsic_image_deref_atomic_swap:
-   case nir_intrinsic_image_heap_load:
-   case nir_intrinsic_image_heap_store:
-   case nir_intrinsic_image_heap_atomic:
-   case nir_intrinsic_image_heap_atomic_swap:
-      return true;
-   default:
-      return false;
-   }
+   const struct dzn_physical_device *pdev =
+      container_of(device->vk.physical, struct dzn_physical_device, vk);
+
+   return !pdev->options4.Native16BitShaderOpsSupported &&
+          (device->vk.enabled_extensions.KHR_shader_float16_int8 ||
+           device->vk.enabled_extensions.KHR_8bit_storage ||
+           device->vk.enabled_extensions.KHR_16bit_storage ||
+           device->vk.enabled_features.shaderFloat16 ||
+           device->vk.enabled_features.shaderInt16 ||
+           device->vk.enabled_features.shaderInt8 ||
+           device->vk.enabled_features.storageBuffer8BitAccess ||
+           device->vk.enabled_features.uniformAndStorageBuffer8BitAccess ||
+           device->vk.enabled_features.storagePushConstant8 ||
+           device->vk.enabled_features.storageBuffer16BitAccess ||
+           device->vk.enabled_features.uniformAndStorageBuffer16BitAccess);
 }
 
 static VkResult
@@ -273,6 +267,10 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
          if ((*nir)->info.stage == MESA_SHADER_VERTEX &&
              BITSET_TEST((*nir)->info.system_values_read, SYSTEM_VALUE_FIRST_VERTEX))
             metadata->needs_draw_sysvals = true;
+         metadata->lowered_large_points = options->lower_large_points &&
+            (*nir)->info.stage == MESA_SHADER_GEOMETRY &&
+            (*nir)->info.gs.output_primitive == MESA_PRIM_TRIANGLE_STRIP &&
+            ((*nir)->info.outputs_written & VARYING_BIT_PNTC);
          return VK_SUCCESS;
       }
    }
@@ -281,8 +279,15 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
       container_of(device->vk.physical, struct dzn_physical_device, vk);
    struct spirv_to_nir_options spirv_opts =
       *dxil_spirv_nir_get_spirv_options();
+   spirv_opts.amd_gcn_shader = device->vk.enabled_extensions.AMD_gcn_shader;
    spirv_opts.amd_trinary_minmax =
       device->vk.enabled_extensions.AMD_shader_trinary_minmax;
+   spirv_opts.amd_shader_explicit_vertex_parameter =
+      device->vk.enabled_extensions.AMD_shader_explicit_vertex_parameter;
+   if (dzn_device_lowers_16bit(device)) {
+      spirv_opts.mediump_16bit_alu = false;
+      spirv_opts.mediump_16bit_derivatives = false;
+   }
 
    VkResult result =
       vk_pipeline_shader_stage_to_nir(&device->vk, pipeline_flags, stage_info,
@@ -290,25 +295,70 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
    if (result != VK_SUCCESS)
       return result;
 
+   NIR_PASS(_, *nir, dxil_nir_lower_amd_cube);
+   bool volume_images = false;
+   bool unformatted_images = false;
+   bool resized_arrays = false;
+   nir_foreach_variable_with_modes(var, *nir,
+                                  nir_var_uniform | nir_var_image | nir_var_mem_ubo | nir_var_mem_ssbo) {
+      if (!device->bindless && glsl_type_is_array(var->type) && !glsl_get_length(var->type) &&
+          var->data.descriptor_set < layout->vk.set_count &&
+          layout->vk.set_layouts[var->data.descriptor_set]) {
+         const struct dzn_descriptor_set_layout *set_layout = container_of(
+            layout->vk.set_layouts[var->data.descriptor_set], struct dzn_descriptor_set_layout, vk);
+         if (var->data.binding < set_layout->binding_count) {
+            var->type = glsl_array_type(glsl_get_array_element(var->type),
+               set_layout->bindings[var->data.binding].descriptor_count,
+               glsl_get_explicit_stride(var->type));
+            resized_arrays = true;
+         }
+      }
+      const struct glsl_type *type = glsl_without_array(var->type);
+      volume_images |= glsl_type_is_image(type) && glsl_get_sampler_dim(type) == GLSL_SAMPLER_DIM_3D;
+      unformatted_images |= glsl_type_is_image(type) && var->data.image.format == PIPE_FORMAT_NONE;
+   }
+   if (resized_arrays)
+      NIR_PASS(_, *nir, nir_fixup_deref_types);
+
+   NIR_PASS(_, *nir, dzn_nir_lower_barycentrics, options->force_sample_rate_shading);
+   if (device->vk.enabled_extensions.AMD_shader_image_load_store_lod)
+      NIR_PASS(_, *nir, dzn_nir_lower_image_lod);
+
+   if (options->patch_vertices)
+      NIR_PASS(_, *nir, dzn_nir_lower_patch_vertices, options->patch_vertices);
+
    if (!dzn_nir_preserve_xfb_position(*nir))
       return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
 
    /* Apply the clip-volume conversion before shared DXIL passes apply any
     * viewport-driven Z reversal to the last rasterization stage.
     */
-   if (options->lower_clip_halfz)
+   if (options->lower_clip_halfz) {
+      NIR_PASS(_, *nir, nir_lower_io_vars_to_temporaries,
+                 nir_shader_get_entrypoint(*nir), nir_var_shader_out);
+      NIR_PASS(_, *nir, nir_split_var_copies);
+      NIR_PASS(_, *nir, nir_lower_var_copies);
       NIR_PASS(_, *nir, nir_lower_clip_halfz);
+   }
 
-   /* D3D12 does not guarantee Vulkan's out-of-bounds storage-image behavior.
-    * Rewrite image accesses to check the descriptor view dimensions in NIR.
-    */
-   if (options->robustness.images == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_EXT ||
-       options->robustness.images == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT)
-      NIR_PASS(_, *nir, nir_lower_robust_access,
-               dzn_robust_image_access_intrinsic_filter, NULL);
+   if (!device->bindless && unformatted_images)
+      NIR_PASS(_, *nir, dzn_nir_lower_unformatted_image_loads, layout);
+
+   bool robust_images = options->robustness.images ==
+                            VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_EXT ||
+                        options->robustness.images ==
+                            VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT;
+   bool robust_buffers = options->robustness.uniform_buffers ==
+                             VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2_EXT ||
+                         options->robustness.storage_buffers ==
+                             VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2_EXT;
+   if (robust_images || robust_buffers)
+      NIR_PASS(_, *nir, dzn_nir_lower_robust_images, layout, robust_images, robust_buffers);
 
    struct dxil_spirv_runtime_conf conf = {
-      .fixed_point_size = true,
+      .fixed_point_size = !options->lower_large_points,
+      .preserve_point_size = true,
+      .split_viewport_sizes = true,
       .runtime_data_cbv = {
          .register_space = DZN_REGISTER_SPACE_SYSVALS,
          .base_shader_register = 0,
@@ -325,8 +375,8 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
          .y_mask = options->y_flip_mask,
          .z_mask = options->z_flip_mask,
       },
-      .declared_read_only_images_as_srvs = !device->bindless,
-      .inferred_read_only_images_as_srvs = !device->bindless,
+      .declared_read_only_images_as_srvs = !device->bindless && !volume_images && !unformatted_images,
+      .inferred_read_only_images_as_srvs = !device->bindless && !volume_images && !unformatted_images,
       .force_sample_rate_shading = options->force_sample_rate_shading,
       .lower_view_index = options->lower_view_index,
       .lower_view_index_to_rt_layer = options->lower_view_index_to_rt_layer,
@@ -490,11 +540,8 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
       container_of(device->vk.physical, struct dzn_physical_device, vk);
    struct nir_to_dxil_options opts = {
       .environment = DXIL_ENVIRONMENT_VULKAN,
-      .lower_int16 = !pdev->options4.Native16BitShaderOpsSupported &&
       /* Don't lower 16-bit types if they can only come from min-precision */
-         (device->vk.enabled_extensions.KHR_shader_float16_int8 ||
-          device->vk.enabled_features.shaderFloat16 ||
-          device->vk.enabled_features.shaderInt16),
+      .lower_int16 = dzn_device_lowers_16bit(device),
       .shader_model_max = dzn_pipeline_get_shader_model(pdev,
                                                         nir->info.stage),
       .input_clip_size = input_clip_size,
@@ -558,7 +605,7 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
 #endif
          ralloc_free(err);
       }
-      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return vk_errorf(device, VK_ERROR_UNKNOWN, "DXIL validation failed");
    }
 #endif
 
@@ -877,11 +924,9 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
 
       if (stage == MESA_SHADER_FRAGMENT &&
           info->pRasterizationState &&
-          (info->pRasterizationState->rasterizerDiscardEnable ||
-           info->pRasterizationState->cullMode == VK_CULL_MODE_FRONT_AND_BACK)) {
-         /* Disable rasterization (AKA leave fragment shader NULL) when
-          * front+back culling or discard is set.
-          */
+          info->pRasterizationState->rasterizerDiscardEnable) {
+         /* Cull mode cannot be used here: Vulkan culling does not affect
+          * point primitives, including points expanded by an internal GS. */
          continue;
       }
 
@@ -898,6 +943,13 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       !(active_stage_mask & (1 << MESA_SHADER_GEOMETRY));
    if (pipeline->use_gs_for_polygon_mode_point)
       last_raster_stage = MESA_SHADER_GEOMETRY;
+   pipeline->use_gs_for_large_points =
+      device->vk.enabled_features.largePoints &&
+      !(active_stage_mask & BITFIELD_BIT(MESA_SHADER_GEOMETRY)) &&
+      (info->pInputAssemblyState->topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST ||
+       (active_stage_mask & BITFIELD_BIT(MESA_SHADER_TESS_EVAL)));
+   if (pipeline->use_gs_for_large_points)
+      last_raster_stage = MESA_SHADER_GEOMETRY;
    pipeline->use_gs_for_provoking_vertex = pipeline->provoking_vertex_last &&
       !pipeline->use_gs_for_polygon_mode_point &&
       !(active_stage_mask & BITFIELD_BIT(MESA_SHADER_GEOMETRY)) &&
@@ -905,7 +957,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       info->pInputAssemblyState->topology != VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
    if (pipeline->use_gs_for_provoking_vertex)
       last_raster_stage = MESA_SHADER_GEOMETRY;
-   const uint32_t provoking_compile_key = 0x50560002u ^
+   const uint32_t provoking_compile_key = 0x50560005u ^
       ((uint32_t)pipeline->provoking_vertex_last << 24) ^
       ((uint32_t)device->vk.enabled_features.provokingVertexLast << 25) ^
       ((uint32_t)info->pInputAssemblyState->topology << 16);
@@ -960,6 +1012,10 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       _mesa_blake3_update(&pipeline_hash_ctx, &force_sample_rate_shading, sizeof(force_sample_rate_shading));
       _mesa_blake3_update(&pipeline_hash_ctx, &lower_view_index, sizeof(lower_view_index));
       _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_polygon_mode_point, sizeof(pipeline->use_gs_for_polygon_mode_point));
+      _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->use_gs_for_large_points,
+                          sizeof(pipeline->use_gs_for_large_points));
+      _mesa_blake3_update(&pipeline_hash_ctx, &device->vk.enabled_features.largePoints,
+                          sizeof(device->vk.enabled_features.largePoints));
       _mesa_blake3_update(&pipeline_hash_ctx, &provoking_compile_key, sizeof(provoking_compile_key));
       _mesa_blake3_update(&pipeline_hash_ctx, &pipeline->patch_control_points, sizeof(pipeline->patch_control_points));
       _mesa_blake3_update(&pipeline_hash_ctx, &domain_origin, sizeof(domain_origin));
@@ -983,9 +1039,14 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       if (ret != VK_SUCCESS)
          return ret;
 
-      if (cache_hit)
+      if (cache_hit) {
+         pipeline->base.cache_hit = true;
          return VK_SUCCESS;
+      }
    }
+
+   if (pipeline->base.flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR)
+      return VK_PIPELINE_COMPILE_REQUIRED;
 
    /* Second step: get NIR shaders for all stages. */
    nir_shader_compiler_options nir_opts;
@@ -995,15 +1056,24 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
    u_foreach_bit(stage, active_stage_mask) {
       blake3_hasher nir_hash_ctx;
 
+      unsigned patch_vertices = stage == MESA_SHADER_TESS_CTRL ? pipeline->patch_control_points :
+         stage == MESA_SHADER_TESS_EVAL ?
+         pipeline->templates.shaders[MESA_SHADER_TESS_CTRL].nir->info.tess.tcs_vertices_out : 0;
       if (cache) {
          _mesa_blake3_init(&nir_hash_ctx);
+         _mesa_blake3_update(&nir_hash_ctx, &patch_vertices, sizeof(patch_vertices));
+         _mesa_blake3_update(&nir_hash_ctx, &provoking_compile_key, sizeof(provoking_compile_key));
          _mesa_blake3_update(&nir_hash_ctx, &device->bindless, sizeof(device->bindless));
+         _mesa_blake3_update(&nir_hash_ctx, &device->vk.enabled_features.largePoints,
+                             sizeof(device->vk.enabled_features.largePoints));
          _mesa_blake3_update(&nir_hash_ctx,
                              &device->vk.enabled_features.robustImageAccess,
                              sizeof(device->vk.enabled_features.robustImageAccess));
          _mesa_blake3_update(&nir_hash_ctx,
                              &device->vk.enabled_features.robustImageAccess2,
                              sizeof(device->vk.enabled_features.robustImageAccess2));
+         bool lowers_16bit = dzn_device_lowers_16bit(device);
+         _mesa_blake3_update(&nir_hash_ctx, &lowers_16bit, sizeof(lowers_16bit));
          if (stage != MESA_SHADER_FRAGMENT) {
             _mesa_blake3_update(&nir_hash_ctx, &lower_view_index, sizeof(lower_view_index));
             _mesa_blake3_update(&nir_hash_ctx, &force_sample_rate_shading, sizeof(force_sample_rate_shading));
@@ -1018,11 +1088,13 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
                                 sizeof(depth_clip_negative_one_to_one));
             _mesa_blake3_update(&nir_hash_ctx, &lower_view_index, sizeof(lower_view_index));
          }
+         _mesa_blake3_update(&nir_hash_ctx, layout->stages[stage].hash, BLAKE3_KEY_LEN);
          _mesa_blake3_update(&nir_hash_ctx, stages[stage].spirv_hash, sizeof(stages[stage].spirv_hash));
          _mesa_blake3_final(&nir_hash_ctx, stages[stage].nir_hash);
       }
 
       struct dzn_nir_options options = {
+         .patch_vertices = patch_vertices,
          .robustness = robustness[stage],
          .yz_flip_mode = stage == last_raster_stage ? yz_flip_mode : DXIL_SPIRV_YZ_FLIP_NONE,
          .y_flip_mask = y_flip_mask,
@@ -1032,6 +1104,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
                              depth_clip_negative_one_to_one,
          .lower_view_index = lower_view_index,
          .lower_view_index_to_rt_layer = stage == last_raster_stage ? lower_view_index : false,
+         .lower_large_points = device->vk.enabled_features.largePoints &&
+                               stage == MESA_SHADER_GEOMETRY,
          .vi_conversions = vi_conversions,
          .nir_opts = &nir_opts,
       };
@@ -1048,12 +1122,14 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
 
       if (stage == MESA_SHADER_VERTEX)
          pipeline->needs_draw_sysvals = metadata.needs_draw_sysvals;
+      pipeline->large_points_expanded |= metadata.lowered_large_points;
    }
 
    nir_shader *domain_shader = pipeline->templates.shaders[MESA_SHADER_TESS_EVAL].nir;
    if (domain_shader && domain_origin == VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT)
       domain_shader->info.tess.ccw = !domain_shader->info.tess.ccw;
-   if (pipeline->use_gs_for_polygon_mode_point || pipeline->use_gs_for_provoking_vertex) {
+   if (pipeline->use_gs_for_polygon_mode_point || pipeline->use_gs_for_provoking_vertex ||
+       pipeline->use_gs_for_large_points) {
       nir_shader *tcs = pipeline->templates.shaders[MESA_SHADER_TESS_CTRL].nir;
       if (tcs)
          NIR_PASS(_, tcs, dzn_nir_lower_patch_vertices, pipeline->patch_control_points);
@@ -1101,6 +1177,23 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
             DZN_REGISTER_SPACE_SYSVALS,
             fragment && (fragment->info.inputs_read & VARYING_BIT_PRIMITIVE_ID));
 
+      if (pipeline->use_gs_for_large_points &&
+          pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir->info.gs.output_primitive == MESA_PRIM_POINTS) {
+         struct dxil_spirv_runtime_conf point_conf = {
+            .fixed_point_size = false,
+            .preserve_point_size = true,
+      .split_viewport_sizes = true,
+            .runtime_data_cbv = {
+               .register_space = DZN_REGISTER_SPACE_SYSVALS,
+               .base_shader_register = 0,
+            },
+         };
+         struct dxil_spirv_metadata point_metadata = { 0 };
+         dxil_spirv_nir_passes(pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir,
+                               &point_conf, &point_metadata);
+         pipeline->large_points_expanded |= point_metadata.lowered_large_points;
+      }
+
       if (depth_clip_negative_one_to_one)
          NIR_PASS(_, pipeline->templates.shaders[MESA_SHADER_GEOMETRY].nir,
                   nir_lower_clip_halfz);
@@ -1146,6 +1239,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       mesa_shader_stage prev_stage = util_last_bit(link_mask) - 1;
 
       struct dxil_spirv_runtime_conf conf = {
+         .direct_point_coord =
+            pipeline->large_points_expanded,
          .runtime_data_cbv = {
             .register_space = DZN_REGISTER_SPACE_SYSVALS,
             .base_shader_register = 0,
@@ -1294,6 +1389,18 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
    /* Stream-output declarations must refer to the final linked DXIL output
     * signatures. Keep them pipeline-owned, never backed by temporary NIR. */
    nir_shader *last_nir = pipeline->templates.shaders[last_raster_stage].nir;
+   if (pipeline->large_points_expanded) {
+      D3D12_RASTERIZER_DESC *rast =
+         dzn_graphics_pipeline_get_desc(pipeline, out->pPipelineStateSubobjectStream, rast);
+      if (rast) {
+         rast->FillMode = D3D12_FILL_MODE_SOLID;
+         rast->CullMode = D3D12_CULL_MODE_NONE;
+         rast->DepthBias = 0;
+         rast->DepthBiasClamp = 0;
+         rast->SlopeScaledDepthBias = 0;
+         rast->ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+      }
+   }
    if (last_nir && last_nir->xfb_info && last_nir->xfb_info->output_count) {
       const nir_xfb_info *xfb = last_nir->xfb_info;
       uint32_t next_offset[D3D12_SO_BUFFER_SLOT_COUNT] = {0};
@@ -1352,7 +1459,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       so->pBufferStrides = pipeline->so_strides;
       so->NumStrides = D3D12_SO_BUFFER_SLOT_COUNT;
       so->RasterizedStream = info->pRasterizationState->rasterizerDiscardEnable ?
-         D3D12_SO_NO_RASTERIZED_STREAM : 0;
+         D3D12_SO_NO_RASTERIZED_STREAM :
+         (pipeline->large_points_expanded ? 1 : 0);
    }
 
    if (cache)
@@ -1731,6 +1839,8 @@ dzn_graphics_pipeline_translate_ms(struct dzn_graphics_pipeline *pipeline,
    if (!in_ms)
       return;
 
+   pipeline->rasterization_samples = in_ms->rasterizationSamples;
+
    /* TODO: minSampleShading (use VRS), alphaToOneEnable */
    d3d12_gfx_pipeline_state_stream_new_desc(out, SAMPLE_DESC, DXGI_SAMPLE_DESC, desc);
    pipeline->templates.desc_offsets.samples =
@@ -1939,6 +2049,20 @@ dzn_graphics_pipeline_translate_zsa(struct dzn_device *device,
    }
 }
 
+static bool
+is_constant_alpha_blend_factor(VkBlendFactor factor)
+{
+   return factor == VK_BLEND_FACTOR_CONSTANT_ALPHA ||
+          factor == VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+}
+
+static bool
+is_constant_color_blend_factor(VkBlendFactor factor)
+{
+   return factor == VK_BLEND_FACTOR_CONSTANT_COLOR ||
+          factor == VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+}
+
 static D3D12_BLEND
 translate_blend_factor(VkBlendFactor in, bool is_alpha, bool support_alpha_blend_factor)
 {
@@ -2037,6 +2161,7 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
    struct dzn_physical_device *pdev =
       container_of(device->vk.physical, struct dzn_physical_device, vk);
    bool support_alpha_blend_factor = pdev->options13.AlphaBlendFactorSupported;
+   bool constant_alpha = false, constant_color = false;
 
    d3d12_gfx_pipeline_state_stream_new_desc(out, BLEND, D3D12_BLEND_DESC, desc);
    D3D12_LOGIC_OP logicop =
@@ -2106,8 +2231,19 @@ dzn_graphics_pipeline_translate_blend(struct dzn_graphics_pipeline *pipeline,
             translate_blend_factor(attachment.dstAlphaBlendFactor, true, support_alpha_blend_factor);
          desc->RenderTarget[i].BlendOpAlpha =
             translate_blend_op(attachment.alphaBlendOp);
+
+         const VkPipelineColorBlendAttachmentState *att = &attachment;
+         if (att->blendEnable) {
+            constant_alpha |= is_constant_alpha_blend_factor(att->srcColorBlendFactor) ||
+                              is_constant_alpha_blend_factor(att->dstColorBlendFactor);
+            constant_color |= is_constant_color_blend_factor(att->srcColorBlendFactor) ||
+                              is_constant_color_blend_factor(att->dstColorBlendFactor);
+         }
       }
    }
+
+   pipeline->blend.splat_constant_alpha =
+      !support_alpha_blend_factor && constant_alpha && !constant_color;
 }
 
 
@@ -2119,12 +2255,15 @@ dzn_pipeline_init(struct dzn_pipeline *pipeline,
                   struct dzn_pipeline_layout *layout,
                   D3D12_PIPELINE_STATE_STREAM_DESC *stream_desc)
 {
+   pipeline->image_metadata_offset = layout->image_metadata_offset;
    pipeline->type = type;
    pipeline->device = device;
    pipeline->flags = flags;
    pipeline->root.sets_param_count = layout->root.sets_param_count;
    pipeline->root.sysval_cbv_param_idx = layout->root.sysval_cbv_param_idx;
+   pipeline->root.viewport_cbv_param_idx = layout->root.viewport_cbv_param_idx;
    pipeline->root.push_constant_cbv_param_idx = layout->root.push_constant_cbv_param_idx;
+   pipeline->root.push_constant_size = layout->root.push_constant_size;
    pipeline->root.dynamic_buffer_bindless_param_idx = layout->root.dynamic_buffer_bindless_param_idx;
    STATIC_ASSERT(sizeof(pipeline->root.type) == sizeof(layout->root.type));
    memcpy(pipeline->root.type, layout->root.type, sizeof(pipeline->root.type));
@@ -2195,6 +2334,29 @@ dzn_graphics_pipeline_cleanup_dxil_shaders(struct dzn_graphics_pipeline *pipelin
 }
 
 static void
+dzn_pipeline_set_creation_feedback(const void *create_info_next,
+                                   const struct dzn_pipeline *pipeline,
+                                   int64_t start_ns)
+{
+   const VkPipelineCreationFeedbackCreateInfo *info =
+      vk_find_struct_const(create_info_next, PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
+   if (!info)
+      return;
+
+   VkPipelineCreationFeedbackFlags flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
+   if (pipeline->cache_hit)
+      flags |= VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
+
+   info->pPipelineCreationFeedback->flags = flags;
+   info->pPipelineCreationFeedback->duration = os_time_get_nano() - start_ns;
+
+   for (uint32_t i = 0; i < info->pipelineStageCreationFeedbackCount; i++) {
+      info->pPipelineStageCreationFeedbacks[i].flags = flags;
+      info->pPipelineStageCreationFeedbacks[i].duration = 0;
+   }
+}
+
+static void
 dzn_graphics_pipeline_destroy(struct dzn_graphics_pipeline *pipeline,
                               const VkAllocationCallbacks *alloc)
 {
@@ -2256,6 +2418,7 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
         bias_representation->depthBiasExact))
       return vk_error(device, VK_ERROR_FEATURE_NOT_PRESENT);
    D3D12_VIEW_INSTANCE_LOCATION vi_locs[D3D12_MAX_VIEW_INSTANCE_COUNT];
+   int64_t start_ns = os_time_get_nano();
 
    struct dzn_graphics_pipeline *pipeline =
       vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*pipeline), 8,
@@ -2523,6 +2686,9 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
       view_mask = ri->viewMask;
    }
 
+   while (color_count && color_fmts[color_count - 1] == VK_FORMAT_UNDEFINED)
+      color_count--;
+
    if (color_count > 0) {
       d3d12_gfx_pipeline_state_stream_new_desc(stream_desc, RENDER_TARGET_FORMATS, struct D3D12_RT_FORMAT_ARRAY, rts);
       rts->NumRenderTargets = color_count;
@@ -2674,15 +2840,7 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
                    "depth-format=%u)\n",
                    (unsigned)hres, pCreateInfo->stageCount, color_count,
                    (unsigned)zs_fmt);
-         /* UWP has no stderr/debug layer on retail devices. Preserve the
-          * native D3D12 failure value so an embedding host can diagnose the
-          * rejected PSO instead of seeing the misleading generic -1. This is
-          * only used on the failure path and is never exposed as success. */
-#ifdef _XBOX_UWP
-         ret = (VkResult)(int32_t)hres;
-#else
          ret = vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
-#endif
          goto out;
       }
 
@@ -2693,10 +2851,12 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
    ret = VK_SUCCESS;
 
 out:
-   if (ret != VK_SUCCESS)
+   if (ret != VK_SUCCESS) {
       dzn_graphics_pipeline_destroy(pipeline, pAllocator);
-   else
+   } else {
+      dzn_pipeline_set_creation_feedback(pCreateInfo->pNext, &pipeline->base, start_ns);
       *out = dzn_graphics_pipeline_to_handle(pipeline);
+   }
 
    return ret;
 }
@@ -2996,6 +3156,13 @@ dzn_graphics_pipeline_get_state_locked(struct dzn_graphics_pipeline *pipeline,
             rast->DepthBias = 0;
             rast->DepthBiasClamp = rast->SlopeScaledDepthBias = 0;
          }
+         if (pipeline->large_points_expanded) {
+            rast->FillMode = D3D12_FILL_MODE_SOLID;
+            rast->CullMode = D3D12_CULL_MODE_NONE;
+            rast->DepthBias = 0;
+            rast->DepthBiasClamp = rast->SlopeScaledDepthBias = 0;
+            rast->ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+         }
       }
       if (dyn & DZN_DYNAMIC_TOPOLOGY) {
          D3D12_PRIMITIVE_TOPOLOGY_TYPE *topology =
@@ -3286,26 +3453,6 @@ dzn_pipeline_creation_feedback_init(
    }
 }
 
-static void
-dzn_pipeline_creation_feedback_finish(
-   const VkPipelineCreationFeedbackCreateInfo *feedback_info,
-   int64_t pipeline_start)
-{
-   if (!feedback_info || !feedback_info->pPipelineCreationFeedback)
-      return;
-
-   /* The application cache stores DXIL shaders, not reusable D3D12 PSOs.
-    * Keep the pipeline-cache-hit bit clear because CreatePipelineState still
-    * creates the native PSO even when every shader came from that cache.
-    * Per-stage feedback is optional; the initialization above reports it as
-    * invalid rather than claiming that shader-cache hits avoided PSO work.
-    */
-   *feedback_info->pPipelineCreationFeedback = (VkPipelineCreationFeedback) {
-      .flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT,
-      .duration = (uint64_t)(os_time_get_nano() - pipeline_start),
-   };
-}
-
 VKAPI_ATTR VkResult VKAPI_CALL
 dzn_CreateGraphicsPipelines(VkDevice dev,
                             VkPipelineCache pipelineCache,
@@ -3325,23 +3472,17 @@ dzn_CreateGraphicsPipelines(VkDevice dev,
    }
 
    for (i = 0; i < count; i++) {
-      const VkPipelineCreationFeedbackCreateInfo *feedback_info =
-         vk_find_struct_const(pCreateInfos[i].pNext,
-                              PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
-      const int64_t pipeline_start = feedback_info ? os_time_get_nano() : 0;
       VkResult pipeline_result = VK_PIPELINE_COMPILE_REQUIRED;
       VkPipelineCreateFlags2KHR flags =
          vk_graphics_pipeline_create_flags(&pCreateInfos[i]);
-      if (!(flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR))
-         pipeline_result = dzn_graphics_pipeline_create(device,
+      pipeline_result = dzn_graphics_pipeline_create(device,
                                                         pipelineCache,
                                                         &pCreateInfos[i],
                                                         pAllocator,
                                                         &pPipelines[i]);
-      if (pipeline_result == VK_SUCCESS)
-         dzn_pipeline_creation_feedback_finish(feedback_info, pipeline_start);
       if (pipeline_result != VK_SUCCESS) {
-         result = pipeline_result;
+         if (result == VK_SUCCESS || result == VK_PIPELINE_COMPILE_REQUIRED)
+            result = pipeline_result;
          pPipelines[i] = VK_NULL_HANDLE;
          if (flags & VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT_KHR)
             break;
@@ -3469,8 +3610,14 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
       ret = dzn_pipeline_cache_lookup_compute_pipeline(cache, pipeline_hash,
                                                        stream_desc, shader,
                                                        &cache_hit);
+      pipeline->base.cache_hit = cache_hit;
       if (ret != VK_SUCCESS || cache_hit)
          goto out;
+   }
+
+   if (pipeline->base.flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR) {
+      ret = VK_PIPELINE_COMPILE_REQUIRED;
+      goto out;
    }
 
    if (cache) {
@@ -3483,11 +3630,14 @@ dzn_compute_pipeline_compile_shader(struct dzn_device *device,
       _mesa_blake3_update(&nir_hash_ctx,
                           &device->vk.enabled_features.robustImageAccess2,
                           sizeof(device->vk.enabled_features.robustImageAccess2));
+      _mesa_blake3_update(&nir_hash_ctx, layout->stages[MESA_SHADER_COMPUTE].hash, BLAKE3_KEY_LEN);
+      bool lowers_16bit = dzn_device_lowers_16bit(device);
+      _mesa_blake3_update(&nir_hash_ctx, &lowers_16bit, sizeof(lowers_16bit));
       _mesa_blake3_update(&nir_hash_ctx, spirv_hash, sizeof(spirv_hash));
       _mesa_blake3_final(&nir_hash_ctx, nir_hash);
    }
    nir_shader_compiler_options nir_opts;
-   const unsigned supported_bit_sizes = 16 | 32 | 64;
+   const unsigned supported_bit_sizes = (pdev->options4.Native16BitShaderOpsSupported ? 16 : 0) | 32 | 64;
    dxil_get_nir_compiler_options(&nir_opts, dzn_get_shader_model(pdev), supported_bit_sizes, supported_bit_sizes);
    struct dzn_nir_options options = {
       .robustness = robustness,
@@ -3555,6 +3705,7 @@ dzn_compute_pipeline_create(struct dzn_device *device,
 {
    VK_FROM_HANDLE(dzn_pipeline_layout, layout, pCreateInfo->layout);
    VK_FROM_HANDLE(vk_pipeline_cache, pcache, cache);
+   int64_t start_ns = os_time_get_nano();
 
    struct dzn_compute_pipeline *pipeline =
       vk_zalloc2(&device->vk.alloc, pAllocator, sizeof(*pipeline), 8,
@@ -3579,20 +3730,36 @@ dzn_compute_pipeline_create(struct dzn_device *device,
    if (ret != VK_SUCCESS)
       goto out;
 
+#ifdef _XBOX_UWP
+   const D3D12_COMPUTE_PIPELINE_STATE_DESC compute_desc = {
+      .pRootSignature = pipeline->base.root.sig,
+      .CS = shader,
+   };
+   HRESULT pso_hr = ID3D12Device4_CreateComputePipelineState(device->dev, &compute_desc,
+                                                           &IID_ID3D12PipelineState,
+                                                           (void **)&pipeline->base.state);
+#else
    HRESULT pso_hr = ID3D12Device4_CreatePipelineState(device->dev, &stream_desc,
                                                      &IID_ID3D12PipelineState,
                                                      (void **)&pipeline->base.state);
+#endif
    if (FAILED(pso_hr)) {
-      _debug_printf("Dozen compute PSO creation failed (HRESULT 0x%08x)\n", (unsigned)pso_hr);
-      ret = vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+      _debug_printf("Dozen compute PSO creation failed (HRESULT 0x%08x, DXIL %zu bytes)\n",
+                    (unsigned)pso_hr, shader.BytecodeLength);
+      const VkResult error = pso_hr == E_OUTOFMEMORY ? VK_ERROR_OUT_OF_DEVICE_MEMORY :
+         (pso_hr == DXGI_ERROR_DEVICE_REMOVED || pso_hr == DXGI_ERROR_DEVICE_RESET) ?
+            VK_ERROR_DEVICE_LOST : VK_ERROR_UNKNOWN;
+      ret = vk_error(device, error);
    }
 
 out:
    free((void *)shader.pShaderBytecode);
-   if (ret != VK_SUCCESS)
+   if (ret != VK_SUCCESS) {
       dzn_compute_pipeline_destroy(pipeline, pAllocator);
-   else
+   } else {
+      dzn_pipeline_set_creation_feedback(pCreateInfo->pNext, &pipeline->base, start_ns);
       *out = dzn_compute_pipeline_to_handle(pipeline);
+   }
 
    return ret;
 }
@@ -3656,23 +3823,17 @@ dzn_CreateComputePipelines(VkDevice dev,
    }
 
    for (i = 0; i < count; i++) {
-      const VkPipelineCreationFeedbackCreateInfo *feedback_info =
-         vk_find_struct_const(pCreateInfos[i].pNext,
-                              PIPELINE_CREATION_FEEDBACK_CREATE_INFO);
-      const int64_t pipeline_start = feedback_info ? os_time_get_nano() : 0;
       VkResult pipeline_result = VK_PIPELINE_COMPILE_REQUIRED;
       VkPipelineCreateFlags2KHR flags =
          vk_compute_pipeline_create_flags(&pCreateInfos[i]);
-      if (!(flags & VK_PIPELINE_CREATE_2_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT_KHR))
-         pipeline_result = dzn_compute_pipeline_create(device,
+      pipeline_result = dzn_compute_pipeline_create(device,
                                                        pipelineCache,
                                                        &pCreateInfos[i],
                                                        pAllocator,
                                                        &pPipelines[i]);
-      if (pipeline_result == VK_SUCCESS)
-         dzn_pipeline_creation_feedback_finish(feedback_info, pipeline_start);
       if (pipeline_result != VK_SUCCESS) {
-         result = pipeline_result;
+         if (result == VK_SUCCESS || result == VK_PIPELINE_COMPILE_REQUIRED)
+            result = pipeline_result;
          pPipelines[i] = VK_NULL_HANDLE;
          if (flags & VK_PIPELINE_CREATE_2_EARLY_RETURN_ON_FAILURE_BIT_KHR)
             break;

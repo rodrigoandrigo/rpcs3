@@ -818,8 +818,6 @@ vk_common_MergePipelineCaches(VkDevice _device,
    if (!dst->object_cache)
       return VK_SUCCESS;
 
-   vk_pipeline_cache_lock(dst);
-
    for (uint32_t i = 0; i < srcCacheCount; i++) {
       VK_FROM_HANDLE(vk_pipeline_cache, src, pSrcCaches[i]);
       assert(src->base.device == device);
@@ -831,7 +829,13 @@ vk_common_MergePipelineCaches(VkDevice _device,
       if (src == dst)
          continue;
 
-      vk_pipeline_cache_lock(src);
+      if ((uintptr_t)dst < (uintptr_t)src) {
+         vk_pipeline_cache_lock(dst);
+         vk_pipeline_cache_lock(src);
+      } else {
+         vk_pipeline_cache_lock(src);
+         vk_pipeline_cache_lock(dst);
+      }
 
       set_foreach(src->object_cache, src_entry) {
          struct vk_pipeline_cache_object *src_object = (void *)src_entry->key;
@@ -859,9 +863,8 @@ vk_common_MergePipelineCaches(VkDevice _device,
       }
 
       vk_pipeline_cache_unlock(src);
+      vk_pipeline_cache_unlock(dst);
    }
-
-   vk_pipeline_cache_unlock(dst);
 
    return VK_SUCCESS;
 }

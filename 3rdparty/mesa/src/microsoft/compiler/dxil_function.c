@@ -34,7 +34,7 @@ struct predefined_func_descr {
 };
 
 static struct  predefined_func_descr predefined_funcs[] = {
-{"dx.op.atomicBinOp", "O", "i@iiiii", DXIL_ATTR_KIND_READ_NONE},
+{"dx.op.atomicBinOp", "O", "i@iiiiO", DXIL_ATTR_KIND_NO_UNWIND},
 {"dx.op.cbufferLoad", "O", "i@ii", DXIL_ATTR_KIND_READ_ONLY},
 {"dx.op.cbufferLoadLegacy", "B", "i@i", DXIL_ATTR_KIND_READ_ONLY},
 {"dx.op.createHandle", "@", "iciib", DXIL_ATTR_KIND_READ_ONLY},
@@ -46,7 +46,7 @@ static struct  predefined_func_descr predefined_funcs[] = {
 {"dx.op.threadIdInGroup", "i", "ii", DXIL_ATTR_KIND_READ_NONE},
 {"dx.op.flattenedThreadIdInGroup", "i", "i", DXIL_ATTR_KIND_READ_NONE},
 {"dx.op.groupId", "i", "ii", DXIL_ATTR_KIND_READ_NONE},
-{"dx.op.cycleCounterLegacy", "g", "i", DXIL_ATTR_KIND_NONE},
+{"dx.op.cycleCounterLegacy", "J", "i", DXIL_ATTR_KIND_NONE},
 {"dx.op.unary", "O", "iO", DXIL_ATTR_KIND_READ_NONE},
 {"dx.op.unaryBits", "i", "iO", DXIL_ATTR_KIND_READ_NONE},
 {"dx.op.isSpecialFloat", "b", "iO", DXIL_ATTR_KIND_READ_NONE},
@@ -75,7 +75,7 @@ static struct  predefined_func_descr predefined_funcs[] = {
 {"dx.op.getDimensions", "D", "i@i", DXIL_ATTR_KIND_READ_ONLY},
 {"dx.op.calculateLOD", "f", "i@@fffb", DXIL_ATTR_KIND_READ_ONLY},
 {"dx.op.barrier", "v", "ii", DXIL_ATTR_KIND_NO_DUPLICATE},
-{"dx.op.atomicCompareExchange", "O", "i@iiiii", DXIL_ATTR_KIND_READ_NONE},
+{"dx.op.atomicCompareExchange", "O", "i@iiiOO", DXIL_ATTR_KIND_NO_UNWIND},
 {"dx.op.textureStore", "v", "i@iiiOOOOc", DXIL_ATTR_KIND_NONE},
 {"dx.op.primitiveID", "i", "i", DXIL_ATTR_KIND_READ_NONE},
 {"dx.op.outputControlPointID", "i", "i", DXIL_ATTR_KIND_READ_NONE},
@@ -226,6 +226,7 @@ get_type_from_string(struct dxil_module *mod, const char *param_descr,
          const struct dxil_type *target = get_type_from_string(mod, param_descr, overload, idx);
          return dxil_module_get_pointer_type(mod, target);
       }
+   case DXIL_FUNC_PARAM_TWOI32: return dxil_module_get_twoi32_type(mod);
    case DXIL_FUNC_PARAM_FOURI32: return dxil_module_get_fouri32_type(mod);
    default:
       assert(0 && "unknown type identifier");

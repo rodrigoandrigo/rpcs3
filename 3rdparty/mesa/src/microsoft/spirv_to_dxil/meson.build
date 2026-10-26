@@ -24,6 +24,14 @@ idep_libspirv_to_dxil = declare_dependency(
    include_directories : include_directories('.')
 )
 
+if with_tests
+  test('dxil_point_size', executable(
+    'dxil_point_size_test', 'point_size_test.c',
+    include_directories : [inc_include, inc_src],
+    dependencies : [idep_nir, idep_libdxil_compiler, idep_libspirv_to_dxil],
+  ), suite : 'd3d12')
+endif
+
 spirv_to_dxil = executable(
   'spirv2dxil',
   files(

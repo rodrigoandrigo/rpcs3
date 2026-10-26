@@ -79,8 +79,13 @@ vk_warn_non_conformant_implementation(const char *driver_name)
    if (debug_get_bool_option("MESA_VK_IGNORE_CONFORMANCE_WARNING", false))
       return;
 
+#ifdef _XBOX_UWP
+   debug_printf("WARNING: %s is not a conformant Vulkan implementation, "
+                "testing use only.\n", driver_name);
+#else
    fprintf(stderr, "WARNING: %s is not a conformant Vulkan implementation, "
                    "testing use only.\n", driver_name);
+#endif
 }
 
 struct nir_spirv_specialization*
